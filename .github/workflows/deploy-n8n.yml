@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       N8N_DOMAIN: "${{ inputs.n8n_subdomain }}.${{ inputs.project_domain }}"
+      GRAPHQL_URL: "https://backboard.railway.com/graphql/v2"
 
     steps:
       - uses: actions/checkout@v4
@@ -97,8 +98,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          GRAPHQL_URL="https://backboard.railway.com/graphql/v2"
-
           gql() {
             curl -sf -X POST "$GRAPHQL_URL" \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
@@ -118,9 +117,14 @@ jobs:
           fi
           echo "  ✅ Railway project created: $PROJECT_ID"
 
-          # Store project/environment IDs in GCP SM for future workflows
-          printf '%s' "$PROJECT_ID"    | gcloud secrets versions add railway-project-id    --project="$GCP_PROJECT" --data-file=-
-          printf '%s' "$ENVIRONMENT_ID" | gcloud secrets versions add railway-environment-id --project="$GCP_PROJECT" --data-file=-
+          # Store project/environment IDs in GCP SM for future workflows (create-or-update)
+          store_id() {
+            local name="$1" value="$2"
+            printf '%s' "$value" | gcloud secrets versions add "$name" --project="$GCP_PROJECT" --data-file=- 2>/dev/null || \
+            printf '%s' "$value" | gcloud secrets create "$name" --project="$GCP_PROJECT" --replication-policy=automatic --data-file=-
+          }
+          store_id "railway-project-id"    "$PROJECT_ID"
+          store_id "railway-environment-id" "$ENVIRONMENT_ID"
 
           # Deploy Postgres service
           echo "Deploying Postgres..."
@@ -148,8 +152,6 @@ jobs:
           N8N_SERVICE_ID: ${{ steps.railway.outputs.n8n_service_id }}
         run: |
           set -euo pipefail
-
-          GRAPHQL_URL="https://backboard.railway.com/graphql/v2"
 
           set_var() {
             local name="$1" value="$2"
@@ -180,8 +182,6 @@ jobs:
           ENVIRONMENT_ID: ${{ steps.railway.outputs.environment_id }}
         run: |
           set -euo pipefail
-
-          GRAPHQL_URL="https://backboard.railway.com/graphql/v2"
 
           echo "Registering custom domain: ${{ env.N8N_DOMAIN }}..."
           DOMAIN_RESPONSE=$(curl -sf -X POST "$GRAPHQL_URL" \

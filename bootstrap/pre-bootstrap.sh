@@ -415,7 +415,18 @@ if [[ "$ENABLE_N8N" == "true" ]]; then
 
   # Step A: Generate N8N secrets in GCP SM
   echo "  Triggering populate-secrets.yml (N8N secret generation)..."
-  sleep 5  # Wait for GitHub to register the new repo's workflows
+
+  # Poll until GitHub registers the workflow in the new repo (repo creation is async)
+  echo "  Waiting for workflows to be available..."
+  _wflow_wait=0
+  until gh_api GET \
+    "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml" \
+    2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('state')=='active' else 1)" 2>/dev/null; do
+    _wflow_wait=$((_wflow_wait + 1))
+    [[ $_wflow_wait -ge 12 ]] && { echo "ERROR: Workflows not available after 60s — check $ORG/$NEW_REPO/actions"; exit 1; }
+    sleep 5
+  done
+
   gh_api POST \
     "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml/dispatches" \
     -H "Content-Type: application/json" -d '{"ref":"main"}' > /dev/null
