@@ -47,20 +47,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Auto-detect GCP project from current gcloud config (Cloud Shell is pre-set)
+GH_TOKEN="${GH_TOKEN:-}"
+[[ -z "$GH_TOKEN" ]] && { echo "ERROR: GH_TOKEN is not set"; exit 1; }
+
+# Cloud Shell pre-sets the active project — skip prompting the user
 if [[ -z "$GCP_PROJECT" ]]; then
-  GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+  GCP_PROJECT=$(gcloud config get-value project 2>/dev/null)
   [[ -z "$GCP_PROJECT" ]] && {
     echo "ERROR: Could not detect GCP project. Run: gcloud config set project YOUR_PROJECT"
     exit 1
   }
 fi
 
-# Auto-detect GitHub org from this template repo's remote origin URL
+# The org is the owner of the repo this script ships in — no network call needed
 if [[ -z "$ORG" ]]; then
-  ORG=$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
-        | sed 's|.*github\.com[:/]\([^/]*\)/.*|\1|' || echo "")
-  [[ -z "$ORG" ]] && {
+  _remote=$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null)
+  _remote="${_remote##*github.com[:/]}"
+  ORG="${_remote%%/*}"
+  [[ -z "$ORG" || "$ORG" == *"http"* ]] && {
     echo "ERROR: Could not detect GitHub org. Pass --org YOUR_ORG explicitly."
     exit 1
   }
@@ -76,9 +80,6 @@ fi
   echo "  --org:         from this repo's git remote URL"
   exit 1
 }
-
-GH_TOKEN="${GH_TOKEN:-}"
-[[ -z "$GH_TOKEN" ]] && { echo "ERROR: GH_TOKEN is not set"; exit 1; }
 
 TEMPLATE_REPO="edri2or/autonomous-ai-system-template"
 SM_APP_KEY="github-app-private-key"
@@ -364,5 +365,6 @@ echo "║                                                          ║"
 echo "║  Next: wait for autonomous-control-plane.yml to pass    ║"
 echo "║  all ADR checks and create ADR-0200 project charter.    ║"
 echo "╚══════════════════════════════════════════════════════════╝"
+
 
 
