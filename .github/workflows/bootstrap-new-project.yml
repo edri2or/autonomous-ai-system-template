@@ -32,10 +32,6 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
   bootstrap:
     name: Bootstrap New Autonomous Project
@@ -50,12 +46,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      # INITIAL GCP AUTH: Uses a temporary Service Account key stored as GCP_BOOTSTRAP_SA_KEY.
-      # Prerequisites:
-      #   1. Create a GCP service account with roles: Secret Manager Admin, WIF Pool Admin, Project IAM Admin
-      #   2. Download its JSON key from GCP Console
-      #   3. Store the full JSON content as GitHub secret GCP_BOOTSTRAP_SA_KEY
-      # After bootstrap succeeds and WIF is verified working, delete GCP_BOOTSTRAP_SA_KEY.
+      # Authenticates using a temporary SA key (see docs/guides/cloud-native-bootstrap.md — Path A).
       - uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_BOOTSTRAP_SA_KEY }}
@@ -67,38 +58,45 @@ jobs:
           terraform_version: '1.9.0'
 
       - name: Verify prerequisites
+        env:
+          GCP_PROJECT: ${{ inputs.gcp_project }}
         run: |
-          bash scripts/verify-gate-001.sh "${{ inputs.gcp_project }}"
-          bash scripts/verify-gate-002.sh "${{ inputs.gcp_project }}" || echo "GATE-002: WIF not pre-created — Terraform will create it"
-          bash scripts/verify-gate-003.sh "${{ inputs.gcp_project }}" || echo "GATE-003: SA not pre-created — Terraform will create it"
+          bash scripts/verify-gate-001.sh "$GCP_PROJECT"
+          bash scripts/verify-gate-002.sh "$GCP_PROJECT" || echo "GATE-002: WIF not pre-created — Terraform will create it"
+          bash scripts/verify-gate-003.sh "$GCP_PROJECT" || echo "GATE-003: SA not pre-created — Terraform will create it"
 
       - name: Run bootstrap
         env:
           GH_TOKEN: ${{ secrets.GH_BOOTSTRAP_PAT }}
+          AUTO_APPROVE: ${{ inputs.apply == true && 'true' || 'false' }}
+          INPUT_ORG: ${{ github.repository_owner }}
+          INPUT_GCP_PROJECT: ${{ inputs.gcp_project }}
+          INPUT_NEW_REPO: ${{ inputs.new_repo }}
+          INPUT_ENABLE_RAILWAY: ${{ inputs.enable_railway }}
+          INPUT_ENABLE_CLOUDFLARE: ${{ inputs.enable_cloudflare }}
+          INPUT_ENABLE_N8N: ${{ inputs.enable_n8n }}
         run: |
-          APPLY_FLAG=""
-          if [[ "${{ inputs.apply }}" == "true" ]]; then
-            APPLY_FLAG="--yes"
-          fi
           bash bootstrap/bootstrap-new-project.sh \
-            --org "${{ github.repository_owner }}" \
-            --gcp-project "${{ inputs.gcp_project }}" \
-            --new-repo "${{ inputs.new_repo }}" \
-            --enable-railway "${{ inputs.enable_railway }}" \
-            --enable-cloudflare "${{ inputs.enable_cloudflare }}" \
-            --enable-n8n "${{ inputs.enable_n8n }}" \
-            ${APPLY_FLAG}
+            --org "$INPUT_ORG" \
+            --gcp-project "$INPUT_GCP_PROJECT" \
+            --new-repo "$INPUT_NEW_REPO" \
+            --enable-railway "$INPUT_ENABLE_RAILWAY" \
+            --enable-cloudflare "$INPUT_ENABLE_CLOUDFLARE" \
+            --enable-n8n "$INPUT_ENABLE_N8N"
 
       - name: Post-bootstrap instructions
-        if: success() && inputs.apply
+        if: success() && inputs.apply == true
+        env:
+          INPUT_ORG: ${{ github.repository_owner }}
+          INPUT_NEW_REPO: ${{ inputs.new_repo }}
         run: |
           echo ""
           echo "================================================================"
           echo "Bootstrap COMPLETE"
-          echo "New repo: https://github.com/${{ github.repository_owner }}/${{ inputs.new_repo }}"
+          echo "New repo: https://github.com/${INPUT_ORG}/${INPUT_NEW_REPO}"
           echo ""
           echo "NEXT STEPS:"
-          echo "  1. Monitor Actions: https://github.com/${{ github.repository_owner }}/${{ inputs.new_repo }}/actions"
+          echo "  1. Monitor Actions: https://github.com/${INPUT_ORG}/${INPUT_NEW_REPO}/actions"
           echo "  2. Confirm autonomous-control-plane.yml passes"
           echo "  3. Confirm ADR-0200 project charter was created"
           echo ""

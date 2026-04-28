@@ -114,8 +114,8 @@ PYEOF
 echo ""
 echo "=== Phase 1: Verify Prerequisites ==="
 bash "$ROOT_DIR/scripts/verify-gate-001.sh" "$GCP_PROJECT" || exit 1
-bash "$ROOT_DIR/scripts/verify-gate-002.sh" "$GCP_PROJECT" || exit 1
-bash "$ROOT_DIR/scripts/verify-gate-003.sh" "$GCP_PROJECT" || exit 1
+bash "$ROOT_DIR/scripts/verify-gate-002.sh" "$GCP_PROJECT" || echo "WARN: GATE-002 — WIF not pre-created; Terraform will create it"
+bash "$ROOT_DIR/scripts/verify-gate-003.sh" "$GCP_PROJECT" || echo "WARN: GATE-003 — SA not pre-created; Terraform will create it"
 echo "✓ All prerequisites verified"
 
 # --------------------------------------------------------------------------

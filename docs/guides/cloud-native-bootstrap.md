@@ -24,7 +24,7 @@ Required:
 - [ ] This template repository is accessible (the repo you're reading now)
 
 Optional (enable only what you need):
-- [ ] **GATE-004:** Telegram bot token (if `enable_railway = true` and you use Telegram)
+- [ ] **GATE-004:** Telegram bot token (if using Telegram integration)
 - [ ] **GATE-005:** Railway API token (if `enable_railway = true`)
 - [ ] **GATE-006:** Cloudflare API token (if `enable_cloudflare = true`)
 
@@ -96,10 +96,10 @@ Go to https://shell.cloud.google.com (or click the `>_` icon in GCP Console).
 ### Step 2 — Install Terraform
 
 ```bash
-# One-time install in Cloud Shell:
-wget -qO- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-sudo apt update && sudo apt install terraform -y
+# One-time install in Cloud Shell (pinned to match the bootstrap workflow):
+TF_VERSION="1.9.0"
+wget -qO terraform.zip "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+unzip -q terraform.zip && sudo mv terraform /usr/local/bin/ && rm terraform.zip
 terraform version
 ```
 
