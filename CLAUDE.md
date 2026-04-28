@@ -1,7 +1,7 @@
 # CLAUDE.md — Autonomous AI System Template
 
 ## Identity
-This repository (`edri2or-commits/autonomous-ai-system-template`) is the FINAL TEMPLATE.
+This repository (`edri2or/autonomous-ai-system-template`) is the FINAL TEMPLATE.
 It is a production-ready framework for building autonomous agents with security-first architecture.
 
 ## Core Principles
