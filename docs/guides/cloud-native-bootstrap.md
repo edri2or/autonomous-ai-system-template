@@ -107,7 +107,7 @@ terraform version
 
 ```bash
 export GH_TOKEN="YOUR_GITHUB_PAT"
-git clone "https://x-access-token:${GH_TOKEN}@github.com/edri2or-commits/autonomous-ai-system-template.git"
+git clone "https://x-access-token:${GH_TOKEN}@github.com/edri2or/autonomous-ai-system-template.git"
 cd autonomous-ai-system-template
 ```
 
