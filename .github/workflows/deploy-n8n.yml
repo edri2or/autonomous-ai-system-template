@@ -40,6 +40,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.project_domain != '' && inputs.n8n_admin_email != ''
     runs-on: ubuntu-latest
     env:
       N8N_DOMAIN: "${{ inputs.n8n_subdomain }}.${{ inputs.project_domain }}"
