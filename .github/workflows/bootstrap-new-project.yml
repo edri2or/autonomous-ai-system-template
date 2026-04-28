@@ -1,5 +1,16 @@
 name: Bootstrap New Project
 
+# NOTE: This workflow requires pre-bootstrap.sh to have been run first,
+# which provisions WIF (GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT_EMAIL)
+# in this repo's GitHub Secrets via the GCP Cloud Shell.
+#
+# For initial project creation (first-time use), run from GCP Cloud Shell:
+#   export GH_TOKEN="ghp_..."
+#   bash bootstrap/pre-bootstrap.sh --gcp-project X --org Y --new-repo Z
+#
+# This workflow is for re-running bootstrap steps from GitHub Actions UI
+# after WIF is already configured.
+
 on:
   workflow_dispatch:
     inputs:
@@ -46,10 +57,12 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Authenticates using a temporary SA key (see docs/guides/cloud-native-bootstrap.md — Path A).
+      # Keyless GCP authentication via WIF — no SA key ever stored in secrets.
+      # WIF pool and bindings are provisioned by pre-bootstrap.sh (run once from Cloud Shell).
       - uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_BOOTSTRAP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -67,7 +80,7 @@ jobs:
 
       - name: Run bootstrap
         env:
-          GH_TOKEN: ${{ secrets.GH_BOOTSTRAP_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           AUTO_APPROVE: ${{ inputs.apply == true && 'true' || 'false' }}
           INPUT_ORG: ${{ github.repository_owner }}
           INPUT_GCP_PROJECT: ${{ inputs.gcp_project }}
@@ -84,7 +97,7 @@ jobs:
             --enable-cloudflare "$INPUT_ENABLE_CLOUDFLARE" \
             --enable-n8n "$INPUT_ENABLE_N8N"
 
-      - name: Post-bootstrap instructions
+      - name: Post-bootstrap summary
         if: success() && inputs.apply == true
         env:
           INPUT_ORG: ${{ github.repository_owner }}
@@ -97,10 +110,6 @@ jobs:
           echo ""
           echo "NEXT STEPS:"
           echo "  1. Monitor Actions: https://github.com/${INPUT_ORG}/${INPUT_NEW_REPO}/actions"
-          echo "  2. Confirm autonomous-control-plane.yml passes"
-          echo "  3. Confirm ADR-0200 project charter was created"
-          echo ""
-          echo "SECURITY: After verifying WIF works end-to-end, delete the"
-          echo "GCP_BOOTSTRAP_SA_KEY GitHub secret — it is no longer needed."
-          echo "All future runs will authenticate via WIF (keyless)."
+          echo "  2. Confirm autonomous-control-plane.yml passes all ADR checks"
+          echo "  3. Confirm docs/adr/0200-project-charter.md was created"
           echo "================================================================"
