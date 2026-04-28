@@ -64,6 +64,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Install PyNaCl once at startup (used by set_github_secret when gh CLI is unavailable)
+if ! command -v gh &>/dev/null; then
+  python3 -c "from nacl import encoding, public" 2>/dev/null \
+    || python3 -m pip install --quiet PyNaCl
+fi
+
 gh_api() {
   local METHOD="$1"; shift
   curl -sf -X "$METHOD" \
@@ -83,13 +89,7 @@ set_github_secret() {
   SECRET_VALUE="$VALUE" SECRET_REPO="$REPO" SECRET_NAME="$NAME" \
   python3 - <<'PYEOF'
 import os, json, urllib.request
-try:
-    from nacl import encoding, public
-except ImportError:
-    import subprocess, sys
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', 'PyNaCl'],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    from nacl import encoding, public
+from nacl import encoding, public
 
 repo  = os.environ["SECRET_REPO"]
 name  = os.environ["SECRET_NAME"]
@@ -193,13 +193,17 @@ PYEOF
 )
 
   echo "  Converting manifest code to App credentials..."
-  APP_RESP=$(gh_api POST "https://api.github.com/app-manifests/$APP_CODE/conversions" \
-    -H "Content-Type: application/json")
-
-  APP_ID=$(echo "$APP_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-  # Write PEM directly to temp file — never printed to stdout
-  echo "$APP_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['pem'])" \
-    > "$PEM_TMPFILE"
+  # Single Python process: parse id + write pem atomically — avoids bash holding the raw JSON twice
+  APP_ID=$(gh_api POST "https://api.github.com/app-manifests/$APP_CODE/conversions" \
+    -H "Content-Type: application/json" \
+    | PEM_PATH="$PEM_TMPFILE" python3 - <<'PYEOF'
+import sys, json, os
+d = json.load(sys.stdin)
+with open(os.environ["PEM_PATH"], "w") as f:
+    f.write(d["pem"])
+print(d["id"])
+PYEOF
+)
 
   [[ -z "$APP_ID" || "$APP_ID" == "None" ]] && { echo "ERROR: Failed to get App ID"; exit 1; }
   [[ ! -s "$PEM_TMPFILE" ]] && { echo "ERROR: Failed to get private key"; exit 1; }
@@ -229,10 +233,7 @@ fi
 echo ""
 echo "── PHASE 2: Create repository ───────────────────────────────"
 
-EXISTING=$(gh_api GET "https://api.github.com/repos/$ORG/$NEW_REPO" 2>/dev/null \
-  | python3 -c "import sys,json; print(json.load(sys.stdin).get('name',''))" 2>/dev/null || echo "")
-
-if [[ "$EXISTING" == "$NEW_REPO" ]]; then
+if gh_api GET "https://api.github.com/repos/$ORG/$NEW_REPO" -o /dev/null 2>/dev/null; then
   echo "✅ $ORG/$NEW_REPO already exists"
 else
   echo "  Creating $ORG/$NEW_REPO from $TEMPLATE_REPO..."
@@ -254,9 +255,9 @@ fi
 echo ""
 echo "── PHASE 3: Terraform ───────────────────────────────────────"
 
-# Clone new repo (suppress token in error output)
-git clone "https://x-access-token:${GH_TOKEN}@github.com/$ORG/$NEW_REPO.git" \
-  "$WORK_DIR/repo" --quiet 2>&1 | grep -v "x-access-token" || true
+# Use url.insteadOf to keep the token out of the visible URL in git output
+git -c "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf=https://github.com/" \
+  clone "https://github.com/$ORG/$NEW_REPO.git" "$WORK_DIR/repo" --quiet
 cd "$WORK_DIR/repo/terraform"
 
 if ! command -v terraform &>/dev/null; then
@@ -293,11 +294,13 @@ echo "  ✅ Terraform apply complete"
 WIF_PROVIDER=$(terraform output -raw workload_identity_provider 2>/dev/null || echo "")
 WIF_SA_EMAIL=$(terraform output -raw workload_identity_sa_email  2>/dev/null || echo "")
 
-PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
-[[ -z "$WIF_PROVIDER" ]] && \
-  WIF_PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-[[ -z "$WIF_SA_EMAIL" ]] && \
-  WIF_SA_EMAIL="github-actions@${GCP_PROJECT}.iam.gserviceaccount.com"
+if [[ -z "$WIF_PROVIDER" || -z "$WIF_SA_EMAIL" ]]; then
+  PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+  [[ -z "$WIF_PROVIDER" ]] && \
+    WIF_PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+  [[ -z "$WIF_SA_EMAIL" ]] && \
+    WIF_SA_EMAIL="github-actions@${GCP_PROJECT}.iam.gserviceaccount.com"
+fi
 
 # ══════════════════════════════════════════════════════════════
 #  PHASE 4 — Configure GitHub secrets in new repo
@@ -333,3 +336,4 @@ echo "║                                                          ║"
 echo "║  Next: wait for autonomous-control-plane.yml to pass    ║"
 echo "║  all ADR checks and create ADR-0200 project charter.    ║"
 echo "╚══════════════════════════════════════════════════════════╝"
+
