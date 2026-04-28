@@ -1,0 +1,38 @@
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfvars
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfplan
+terraform/tfplan
+**/.terraform.lock.hcl
+
+# Secrets — NEVER commit
+*.pem
+app-key.pem
+secrets/
+.env
+.env.*
+
+# Wrangler
+terraform/modules/cloudflare-gateway/wrangler.toml
+.wrangler/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.npm/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bootstrap working dirs
+/tmp/bootstrap-*/
+BOOTSTRAP-OUTPUT.md

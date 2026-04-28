@@ -1,0 +1,106 @@
+name: Distribute Skills
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  distribute:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install pyyaml
+
+      # ADR-0100: WIF auth before any GCP access
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Retrieve GitHub App Private Key
+        run: |
+          gcloud secrets versions access latest --secret="github-app-private-key" > /tmp/app-key.pem
+          chmod 600 /tmp/app-key.pem
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.GITHUB_APP_ID }}
+          private-key-path: /tmp/app-key.pem
+
+      - name: Fetch skills from central registry
+        run: |
+          git remote add upstream https://github.com/edri2or/ripo-skills-main.git || true
+          git fetch upstream main
+          git checkout upstream/main -- skills/ 2>/dev/null || echo "No skills/ directory in upstream, skipping"
+          echo "Skills fetch complete"
+
+      - name: Update SKILL-CATALOG.md
+        run: |
+          python3 << 'PYTHON'
+          import os, yaml
+
+          skills_dir = 'skills'
+          if not os.path.isdir(skills_dir):
+              print(f"No {skills_dir}/ directory found, skipping catalog update")
+              exit(0)
+
+          skills = []
+          for skill_dir in os.listdir(skills_dir):
+              skill_md = os.path.join(skills_dir, skill_dir, 'SKILL.md')
+              if not os.path.exists(skill_md):
+                  continue
+              with open(skill_md) as f:
+                  content = f.read()
+              parts = content.split('---')
+              if len(parts) >= 3:
+                  try:
+                      meta = yaml.safe_load(parts[1])
+                      skills.append({
+                          'name': meta.get('name', skill_dir),
+                          'portability': meta.get('portability_score', 0),
+                          'description': meta.get('description', ''),
+                      })
+                  except yaml.YAMLError:
+                      pass
+
+          skills.sort(key=lambda x: x['portability'], reverse=True)
+
+          os.makedirs('docs', exist_ok=True)
+          with open('docs/SKILL-CATALOG.md', 'w') as f:
+              f.write('# Skill Catalog\n\n')
+              f.write(f'*Updated automatically — {len(skills)} skills*\n\n')
+              f.write('| Skill | Portability | Description |\n')
+              f.write('|-------|-------------|-------------|\n')
+              for s in skills:
+                  f.write(f"| {s['name']} | {s['portability']} | {s['description']} |\n")
+
+          print(f"Catalog written: {len(skills)} skills")
+          PYTHON
+
+      - name: Commit skill updates
+        run: |
+          git config user.name "autonomous-setup"
+          git config user.email "setup@autonomous.local"
+          git add skills/ docs/SKILL-CATALOG.md 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: skill distribution from central registry [skip ci]"
+          git push origin main || echo "Nothing to push"

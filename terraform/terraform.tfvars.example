@@ -1,0 +1,24 @@
+# ==============================================================================
+# terraform.tfvars.example
+#
+# Copy to terraform.tfvars and fill in values before running bootstrap.
+# NEVER commit terraform.tfvars — it is .gitignored.
+# ==============================================================================
+
+# Required
+gcp_project_id = "your-gcp-project-id"
+github_org     = "your-github-org-or-user"
+github_app_id  = "123456"
+
+# Optional: leave as-is to disable providers
+enable_railway    = false
+enable_cloudflare = false
+enable_n8n        = false
+
+# Required only if enable_railway = true
+railway_workspace_id = ""
+
+# Required only if enable_cloudflare = true
+cloudflare_account_id = ""
+cloudflare_zone_id    = ""
+cloudflare_domain     = ""

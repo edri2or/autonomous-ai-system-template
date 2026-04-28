@@ -1,0 +1,69 @@
+name: Rotate Cloudflare Token
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly, Sunday midnight UTC
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    if: vars.ENABLE_CLOUDFLARE == 'true'
+
+    permissions:
+      id-token: write
+
+    steps:
+      # ADR-0100: WIF auth — no stored GCP keys
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Retrieve current Cloudflare token from GCP SM
+        run: |
+          CURRENT_TOKEN=$(gcloud secrets versions access latest --secret="cloudflare-api-token")
+          echo "::add-mask::$CURRENT_TOKEN"
+          echo "CURRENT_CF_TOKEN=$CURRENT_TOKEN" >> $GITHUB_ENV
+
+      - name: Create new Cloudflare token
+        run: |
+          NEW_TOKEN=$(curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/user/tokens" \
+            -H "Authorization: Bearer ${CURRENT_CF_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "automation-rotated-'"$(date +%Y%m%d)"'",
+              "policies": [
+                {
+                  "effect": "allow",
+                  "resources": {"com.cloudflare.api.account.*": "*"},
+                  "permission_groups": [
+                    {"id": "c8fed203ed3043cba015a93ad1616fb8"}
+                  ]
+                }
+              ]
+            }' | jq -r '.result.value')
+          echo "::add-mask::$NEW_TOKEN"
+          echo "NEW_CF_TOKEN=$NEW_TOKEN" >> $GITHUB_ENV
+
+      - name: Store new token in GCP Secret Manager
+        run: |
+          echo -n "$NEW_CF_TOKEN" | \
+            gcloud secrets versions add cloudflare-api-token --data-file=-
+
+      - name: Verify new token works
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${NEW_CF_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "New token verification failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+          echo "Token rotation successful"
