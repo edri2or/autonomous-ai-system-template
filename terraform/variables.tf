@@ -60,3 +60,21 @@ variable "cloudflare_domain" {
   type        = string
   default     = ""
 }
+
+variable "project_domain" {
+  description = "Full domain for this project (e.g. myproject.or-infra.com). Used for N8N custom domain and Cloudflare CNAME. Must be in the Cloudflare zone."
+  type        = string
+  default     = ""
+}
+
+variable "n8n_subdomain" {
+  description = "Subdomain prefix for N8N (e.g. 'n8n' gives n8n.<project_domain>)"
+  type        = string
+  default     = "n8n"
+}
+
+variable "n8n_admin_email" {
+  description = "Admin email for N8N owner account (created post-deploy by deploy-n8n.yml)"
+  type        = string
+  default     = ""
+}

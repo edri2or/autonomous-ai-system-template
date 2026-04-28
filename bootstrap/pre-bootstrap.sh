@@ -24,7 +24,13 @@
 #   --enable-railway    true|false
 #   --enable-cloudflare true|false
 #   --enable-n8n        true|false
-#   --yes                           (skip Terraform confirm)
+#   --railway-token     RAILWAY_API_TOKEN  (required if --enable-railway true)
+#   --cf-token          CF_API_TOKEN       (required if --enable-cloudflare true)
+#   --cf-zone-id        CF_ZONE_ID         (required if --enable-cloudflare true)
+#   --project-domain    my.domain.com      (required if --enable-n8n true, e.g. myproject.or-infra.com)
+#   --n8n-subdomain     n8n                (default: n8n)
+#   --n8n-admin-email   admin@my.domain    (required if --enable-n8n true)
+#   --yes                                  (skip Terraform confirm)
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,6 +38,8 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 ORG=""; GCP_PROJECT=""; NEW_REPO=""
 ENABLE_RAILWAY="false"; ENABLE_CLOUDFLARE="false"; ENABLE_N8N="false"
+RAILWAY_TOKEN=""; CF_TOKEN=""; CF_ZONE_ID=""
+PROJECT_DOMAIN=""; N8N_SUBDOMAIN="n8n"; N8N_ADMIN_EMAIL=""
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
 
 while [[ $# -gt 0 ]]; do
@@ -42,6 +50,12 @@ while [[ $# -gt 0 ]]; do
     --enable-railway)    ENABLE_RAILWAY="$2";     shift 2 ;;
     --enable-cloudflare) ENABLE_CLOUDFLARE="$2";  shift 2 ;;
     --enable-n8n)        ENABLE_N8N="$2";         shift 2 ;;
+    --railway-token)     RAILWAY_TOKEN="$2";      shift 2 ;;
+    --cf-token)          CF_TOKEN="$2";           shift 2 ;;
+    --cf-zone-id)        CF_ZONE_ID="$2";         shift 2 ;;
+    --project-domain)    PROJECT_DOMAIN="$2";     shift 2 ;;
+    --n8n-subdomain)     N8N_SUBDOMAIN="$2";      shift 2 ;;
+    --n8n-admin-email)   N8N_ADMIN_EMAIL="$2";    shift 2 ;;
     --yes|-y)            AUTO_APPROVE="true";     shift   ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -49,6 +63,22 @@ done
 
 GH_TOKEN="${GH_TOKEN:-}"
 [[ -z "$GH_TOKEN" ]] && { echo "ERROR: GH_TOKEN is not set"; exit 1; }
+
+# Validate Railway/Cloudflare/N8N args if enabled
+if [[ "$ENABLE_RAILWAY" == "true" ]] && [[ -z "$RAILWAY_TOKEN" ]]; then
+  echo "ERROR: --railway-token is required when --enable-railway true"
+  echo "  Get your Railway API token: https://railway.com/account/tokens"
+  exit 1
+fi
+if [[ "$ENABLE_CLOUDFLARE" == "true" ]] && { [[ -z "$CF_TOKEN" ]] || [[ -z "$CF_ZONE_ID" ]]; }; then
+  echo "ERROR: --cf-token and --cf-zone-id are required when --enable-cloudflare true"
+  exit 1
+fi
+if [[ "$ENABLE_N8N" == "true" ]] && { [[ -z "$PROJECT_DOMAIN" ]] || [[ -z "$N8N_ADMIN_EMAIL" ]]; }; then
+  echo "ERROR: --project-domain and --n8n-admin-email are required when --enable-n8n true"
+  echo "  Example: --project-domain myproject.or-infra.com --n8n-admin-email admin@myproject.or-infra.com"
+  exit 1
+fi
 
 # Cloud Shell pre-sets the active project — skip prompting the user
 if [[ -z "$GCP_PROJECT" ]]; then
@@ -298,12 +328,15 @@ if ! command -v terraform &>/dev/null; then
 fi
 
 cat > terraform.tfvars <<TFVARS
-gcp_project        = "$GCP_PROJECT"
+gcp_project_id     = "$GCP_PROJECT"
 github_org         = "$ORG"
-github_repo        = "$NEW_REPO"
+repo_name          = "$NEW_REPO"
 enable_railway     = $ENABLE_RAILWAY
 enable_cloudflare  = $ENABLE_CLOUDFLARE
 enable_n8n         = $ENABLE_N8N
+project_domain     = "$PROJECT_DOMAIN"
+n8n_subdomain      = "$N8N_SUBDOMAIN"
+n8n_admin_email    = "$N8N_ADMIN_EMAIL"
 TFVARS
 
 # Cloud Shell provides Application Default Credentials — no SA key needed
@@ -340,8 +373,94 @@ echo "  Setting WIF credentials in $ORG/$NEW_REPO..."
 
 set_github_secret "$ORG/$NEW_REPO" "GCP_WORKLOAD_IDENTITY_PROVIDER" "$WIF_PROVIDER"
 set_github_secret "$ORG/$NEW_REPO" "GCP_SERVICE_ACCOUNT_EMAIL"      "$WIF_SA_EMAIL"
+set_github_secret "$ORG/$NEW_REPO" "GCP_PROJECT_ID"                 "$GCP_PROJECT"
 
 echo "  ✅ GitHub secrets configured (WIF only — no SA key stored)"
+
+# ══════════════════════════════════════════════════════════════
+#  PHASE 4.5 — Store Railway / Cloudflare credentials in GCP SM
+#  (Only if the respective providers are enabled)
+# ══════════════════════════════════════════════════════════════
+if [[ "$ENABLE_RAILWAY" == "true" ]] && [[ -n "$RAILWAY_TOKEN" ]]; then
+  echo ""
+  echo "── PHASE 4.5: Store provider credentials in GCP SM ─────────"
+
+  store_sm_secret() {
+    local name="$1" value="$2"
+    printf '%s' "$value" | \
+      gcloud secrets versions add "$name" --project="$GCP_PROJECT" --data-file=- 2>/dev/null || \
+    printf '%s' "$value" | \
+      gcloud secrets create "$name" --project="$GCP_PROJECT" \
+        --replication-policy=automatic --data-file=-
+    echo "  ✅ $name stored in GCP SM"
+  }
+
+  echo "  Storing Railway API token..."
+  store_sm_secret "railway-api-token" "$RAILWAY_TOKEN"
+
+  if [[ "$ENABLE_CLOUDFLARE" == "true" ]] && [[ -n "$CF_TOKEN" ]]; then
+    echo "  Storing Cloudflare credentials..."
+    store_sm_secret "cloudflare-api-token" "$CF_TOKEN"
+    store_sm_secret "cloudflare-zone-id"   "$CF_ZONE_ID"
+  fi
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  PHASE 4.7 — Provision N8N on Railway + Cloudflare DNS
+#  (Only if --enable-n8n true)
+# ══════════════════════════════════════════════════════════════
+if [[ "$ENABLE_N8N" == "true" ]]; then
+  echo ""
+  echo "── PHASE 4.7: Deploy N8N ────────────────────────────────────"
+
+  # Step A: Generate N8N secrets in GCP SM
+  echo "  Triggering populate-secrets.yml (N8N secret generation)..."
+  sleep 5  # Wait for GitHub to register the new repo's workflows
+  gh_api POST \
+    "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml/dispatches" \
+    -H "Content-Type: application/json" -d '{"ref":"main"}' > /dev/null
+  echo "  ✅ populate-secrets.yml triggered"
+
+  # Wait for populate-secrets.yml to complete (poll for up to 3 minutes)
+  echo "  Waiting for secret generation to complete..."
+  WAIT=0
+  while [[ $WAIT -lt 18 ]]; do
+    sleep 10; WAIT=$((WAIT + 1))
+    RUN_STATUS=$(gh_api GET \
+      "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml/runs?per_page=1" \
+      | python3 -c "import sys,json; runs=json.load(sys.stdin).get('workflow_runs',[]); print(runs[0]['conclusion'] if runs else 'pending')" 2>/dev/null || echo "pending")
+    [[ "$RUN_STATUS" == "success" ]] && break
+    [[ "$RUN_STATUS" == "failure" || "$RUN_STATUS" == "cancelled" ]] && {
+      echo "ERROR: populate-secrets.yml failed. Check GitHub Actions logs."
+      exit 1
+    }
+    echo "  Status: $RUN_STATUS (${WAIT}/18)..."
+  done
+
+  # Step B: Deploy N8N + create Cloudflare CNAME + create owner account
+  echo "  Triggering deploy-n8n.yml..."
+  DISPATCH_BODY=$(python3 - <<PYEOF
+import json, os
+print(json.dumps({
+  "ref": "main",
+  "inputs": {
+    "project_domain":  os.environ.get("PROJECT_DOMAIN", ""),
+    "n8n_subdomain":   os.environ.get("N8N_SUBDOMAIN", "n8n"),
+    "n8n_admin_email": os.environ.get("N8N_ADMIN_EMAIL", ""),
+    "project_name":    os.environ.get("NEW_REPO", "")
+  }
+}))
+PYEOF
+)
+  PROJECT_DOMAIN="$PROJECT_DOMAIN" N8N_SUBDOMAIN="$N8N_SUBDOMAIN" \
+  N8N_ADMIN_EMAIL="$N8N_ADMIN_EMAIL" NEW_REPO="$NEW_REPO" \
+  gh_api POST \
+    "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/deploy-n8n.yml/dispatches" \
+    -H "Content-Type: application/json" \
+    -d "$DISPATCH_BODY" > /dev/null
+  echo "  ✅ deploy-n8n.yml triggered (Railway + Cloudflare + N8N owner setup)"
+  echo "  Monitor: https://github.com/$ORG/$NEW_REPO/actions"
+fi
 
 # ══════════════════════════════════════════════════════════════
 #  PHASE 5 — Trigger autonomous control plane
@@ -361,9 +480,11 @@ echo "║  Bootstrap COMPLETE                                      ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 printf  "║  Repo:    https://github.com/%-28s ║\n" "$ORG/$NEW_REPO"
 printf  "║  Actions: https://github.com/%-17s/actions ║\n" "$ORG/$NEW_REPO"
+if [[ "$ENABLE_N8N" == "true" ]]; then
+printf  "║  N8N:     https://%-39s ║\n" "$N8N_SUBDOMAIN.$PROJECT_DOMAIN"
+fi
 echo "║                                                          ║"
-echo "║  Next: wait for autonomous-control-plane.yml to pass    ║"
-echo "║  all ADR checks and create ADR-0200 project charter.    ║"
+echo "║  Next: wait for workflows to complete in GitHub Actions  ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 
 
