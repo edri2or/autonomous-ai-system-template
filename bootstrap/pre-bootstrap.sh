@@ -4,22 +4,27 @@
 # Cloud Shell one-command bootstrap for a new autonomous AI project.
 # No SA key required — uses GCP Application Default Credentials (Cloud Shell is pre-authenticated).
 #
+# GCP project and GitHub org are auto-detected from the environment.
+# Only the new project name is required.
+#
 # User actions required (everything else is automated):
-#   1. Run this script from GCP Cloud Shell
-#   2. Open the URL shown and click "Create GitHub App" on GitHub
-#   3. Paste back the redirect URL when prompted
-#   4. Confirm Terraform apply when prompted (or pass --yes to skip)
+#   1. export GH_TOKEN="ghp_..."   # Classic PAT: repo, workflow, admin:org
+#   2. Run this script from GCP Cloud Shell
+#   3. Open the URL shown and click "Create GitHub App" on GitHub
+#   4. Paste back the redirect URL when prompted
+#   5. Confirm Terraform apply when prompted (or pass --yes to skip)
 #
 # Usage:
-#   export GH_TOKEN="ghp_..."   # Classic PAT: repo, workflow, admin:org
-#   bash bootstrap/pre-bootstrap.sh \
-#     --gcp-project  MY_GCP_PROJECT \
-#     --org          MY_ORG         \
-#     --new-repo     MY_NEW_REPO    \
-#     [--enable-railway    true|false] \
-#     [--enable-cloudflare true|false] \
-#     [--enable-n8n        true|false] \
-#     [--yes]
+#   export GH_TOKEN="ghp_..."
+#   bash bootstrap/pre-bootstrap.sh --new-repo MY_PROJECT_NAME
+#
+# Optional overrides (auto-detected if omitted):
+#   --gcp-project  GCP_PROJECT_ID  (default: current gcloud project)
+#   --org          GITHUB_ORG      (default: owner of this template repo)
+#   --enable-railway    true|false
+#   --enable-cloudflare true|false
+#   --enable-n8n        true|false
+#   --yes                           (skip Terraform confirm)
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,10 +47,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -z "$ORG" || -z "$GCP_PROJECT" || -z "$NEW_REPO" ]] && {
-  echo "Usage: $0 --gcp-project PROJECT --org ORG --new-repo REPO [options]"
+# Auto-detect GCP project from current gcloud config (Cloud Shell is pre-set)
+if [[ -z "$GCP_PROJECT" ]]; then
+  GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+  [[ -z "$GCP_PROJECT" ]] && {
+    echo "ERROR: Could not detect GCP project. Run: gcloud config set project YOUR_PROJECT"
+    exit 1
+  }
+fi
+
+# Auto-detect GitHub org from this template repo's remote origin URL
+if [[ -z "$ORG" ]]; then
+  ORG=$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
+        | sed 's|.*github\.com[:/]\([^/]*\)/.*|\1|' || echo "")
+  [[ -z "$ORG" ]] && {
+    echo "ERROR: Could not detect GitHub org. Pass --org YOUR_ORG explicitly."
+    exit 1
+  }
+fi
+
+[[ -z "$NEW_REPO" ]] && {
+  echo "Usage: $0 --new-repo PROJECT_NAME [options]"
   echo ""
   echo "Required env: GH_TOKEN (Classic PAT with scopes: repo, workflow, admin:org)"
+  echo ""
+  echo "Auto-detected from environment:"
+  echo "  --gcp-project: from 'gcloud config get-value project'"
+  echo "  --org:         from this repo's git remote URL"
   exit 1
 }
 
@@ -336,4 +364,5 @@ echo "║                                                          ║"
 echo "║  Next: wait for autonomous-control-plane.yml to pass    ║"
 echo "║  all ADR checks and create ADR-0200 project charter.    ║"
 echo "╚══════════════════════════════════════════════════════════╝"
+
 
