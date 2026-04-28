@@ -33,39 +33,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # ADR-0100: Authenticate to GCP via WIF (no stored keys)
-      - uses: google-github-actions/auth@v2
-        id: gcp-auth
+      # ADR-0100: WIF → GCP SM → GitHub App ephemeral token
+      - uses: ./.github/actions/mint-github-app-token
+        id: mint-token
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
-          token_format: 'access_token'
-          access_token_lifetime: '600s'
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      # ADR-0100: Retrieve GitHub App private key from GCP Secret Manager
-      - name: Retrieve GitHub App Private Key
-        run: |
-          gcloud secrets versions access latest --secret="github-app-private-key" > /tmp/app-key.pem
-          chmod 600 /tmp/app-key.pem
-
-      # ADR-0100: Mint ephemeral GitHub App token (10-min JWT, 1-hour install token)
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.GITHUB_APP_ID }}
-          private-key-path: /tmp/app-key.pem
+          gh_app_id: ${{ secrets.GH_APP_ID }}
 
       - name: Verify GitHub App API access
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+            -H "Authorization: Bearer ${{ steps.mint-token.outputs.token }}" \
             https://api.github.com/repos/${{ github.repository }})
           if [ "$HTTP_CODE" != "200" ]; then
             echo "GitHub App API verification failed (HTTP $HTTP_CODE)"
@@ -80,14 +60,15 @@ jobs:
           echo "PASS"
 
           echo "--- ADR-0101: Explicit Secret Passing (no secrets:inherit) ---"
-          if grep -r "secrets: inherit" .github/workflows/; then
+          if grep -r "secrets: inherit" .github/workflows/ | grep -v "autonomous-control-plane.yml:"; then
             echo "FAIL: secrets:inherit found — violates ADR-0101"
             exit 1
           fi
           echo "PASS"
 
           echo "--- ADR-0102: No mcp__github__ references ---"
-          if grep -r "mcp__github__" . --include="*.yml" --include="*.yaml" --include="*.sh" 2>/dev/null; then
+          if grep -r "mcp__github__" . --include="*.yml" --include="*.yaml" --include="*.sh" \
+               --exclude="autonomous-control-plane.yml" 2>/dev/null; then
             echo "FAIL: mcp__github__ found — violates ADR-0102"
             exit 1
           fi
@@ -98,7 +79,7 @@ jobs:
           echo "PASS"
 
           echo "--- ADR-0104: Bearer token pattern ---"
-          grep -rq "Authorization.*Bearer" scripts/ || (echo "WARN: Bearer pattern not found in scripts/")
+          grep -rq "Authorization.*Bearer" scripts/ || echo "WARN: Bearer pattern not found in scripts/"
           echo "PASS"
 
           echo "All ADR checks complete"
@@ -173,10 +154,12 @@ jobs:
       - name: Report Status
         if: always()
         uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.mint-token.outputs.token }}
           script: |
-            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            const status = process.env.JOB_STATUS === 'success' ? '✅' : '❌';
             const body = `${status} **Autonomous Control Plane — ${status === '✅' ? 'Complete' : 'Failed'}**
 
             | Check | Result |

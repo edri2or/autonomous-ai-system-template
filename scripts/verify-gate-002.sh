@@ -32,12 +32,12 @@ fi
 
 echo "  WIF pool: ACTIVE"
 
-# Check WIF provider exists
-PROVIDER_STATE=$(gcloud iam workload-identity-pools providers describe github-provider \
+# Check WIF provider state + issuer URI in a single API call
+PROVIDER_INFO=$(gcloud iam workload-identity-pools providers describe github-provider \
   --project="$GCP_PROJECT" \
   --location=global \
   --workload-identity-pool=github-pool \
-  --format="value(state)" 2>&1) || {
+  --format="value(state,oidc.issuerUri)" 2>&1) || {
   echo "FAIL: WIF provider 'github-provider' not found"
   echo ""
   echo "Create with:"
@@ -50,19 +50,15 @@ PROVIDER_STATE=$(gcloud iam workload-identity-pools providers describe github-pr
   exit 1
 }
 
+PROVIDER_STATE=$(echo "$PROVIDER_INFO" | cut -f1)
+ISSUER=$(echo "$PROVIDER_INFO" | cut -f2)
+
 if [[ "$PROVIDER_STATE" != "ACTIVE" ]]; then
   echo "FAIL: WIF provider state is '$PROVIDER_STATE' (expected ACTIVE)"
   exit 1
 fi
 
 echo "  WIF provider: ACTIVE"
-
-# Check issuer URI points to GitHub Actions
-ISSUER=$(gcloud iam workload-identity-pools providers describe github-provider \
-  --project="$GCP_PROJECT" \
-  --location=global \
-  --workload-identity-pool=github-pool \
-  --format="value(oidc.issuerUri)")
 
 if [[ "$ISSUER" != "https://token.actions.githubusercontent.com" ]]; then
   echo "FAIL: WIF provider issuer URI is '$ISSUER' (expected https://token.actions.githubusercontent.com)"

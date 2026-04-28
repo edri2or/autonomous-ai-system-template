@@ -37,39 +37,14 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# Gate V5-B: GitHub App token minting
+# Gate V5-B: GitHub App private key available and valid PEM format
 # --------------------------------------------------------------------------
 echo ""
 echo "--- V5-B: GitHub App Token ---"
-if [[ -f /tmp/app-key.pem ]]; then
-  APP_ID="${GITHUB_APP_ID:-}"
-  if [[ -n "$APP_ID" ]]; then
-    # Create JWT (simplified check — actual minting happens in workflow step)
-    JWT_CHECK=$(python3 -c "
-import sys, time
-try:
-  import jwt
-  with open('/tmp/app-key.pem') as f:
-    key = f.read()
-  payload = {'iat': int(time.time()), 'exp': int(time.time()) + 600, 'iss': '${APP_ID}'}
-  token = jwt.encode(payload, key, algorithm='RS256')
-  print('OK')
-except ImportError:
-  print('SKIP_NO_JWT')
-except Exception as e:
-  print(f'FAIL:{e}')
-" 2>/dev/null || echo "SKIP")
-    case "$JWT_CHECK" in
-      OK)             pass "GitHub App JWT creation successful" ;;
-      SKIP_NO_JWT)    skip "GitHub App JWT (PyJWT not installed — OK in GH Actions)" ;;
-      FAIL*)          fail "GitHub App JWT: $JWT_CHECK" ;;
-      *)              skip "GitHub App JWT (check skipped)" ;;
-    esac
-  else
-    skip "GitHub App ID not set"
-  fi
+if [[ -n "${APP_PRIVATE_KEY:-}" ]] && echo "$APP_PRIVATE_KEY" | grep -q "BEGIN.*PRIVATE KEY"; then
+  pass "GitHub App private key loaded from GCP Secret Manager (valid PEM)"
 else
-  skip "GitHub App private key not at /tmp/app-key.pem"
+  skip "GitHub App private key not available in APP_PRIVATE_KEY env var"
 fi
 
 # --------------------------------------------------------------------------

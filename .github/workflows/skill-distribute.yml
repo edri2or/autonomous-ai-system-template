@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
@@ -28,29 +28,18 @@ jobs:
 
       - run: pip install pyyaml
 
-      # ADR-0100: WIF auth before any GCP access
-      - uses: google-github-actions/auth@v2
+      # ADR-0100: WIF → GCP SM → GitHub App ephemeral token
+      - uses: ./.github/actions/mint-github-app-token
+        id: mint-token
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Retrieve GitHub App Private Key
-        run: |
-          gcloud secrets versions access latest --secret="github-app-private-key" > /tmp/app-key.pem
-          chmod 600 /tmp/app-key.pem
-
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.GITHUB_APP_ID }}
-          private-key-path: /tmp/app-key.pem
+          gh_app_id: ${{ secrets.GH_APP_ID }}
 
       - name: Fetch skills from central registry
         run: |
           git remote add upstream https://github.com/edri2or/ripo-skills-main.git || true
-          git fetch upstream main
+          git fetch --depth=1 upstream main
           git checkout upstream/main -- skills/ 2>/dev/null || echo "No skills/ directory in upstream, skipping"
           echo "Skills fetch complete"
 

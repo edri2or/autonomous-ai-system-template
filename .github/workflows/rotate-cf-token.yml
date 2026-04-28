@@ -49,6 +49,10 @@ jobs:
                 }
               ]
             }' | jq -r '.result.value')
+          if [ -z "$NEW_TOKEN" ] || [ "$NEW_TOKEN" = "null" ]; then
+            echo "ERROR: Cloudflare token creation failed — API returned null"
+            exit 1
+          fi
           echo "::add-mask::$NEW_TOKEN"
           echo "NEW_CF_TOKEN=$NEW_TOKEN" >> $GITHUB_ENV
 

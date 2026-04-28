@@ -42,8 +42,68 @@ if [[ -z "$ORG" || -z "$GCP_PROJECT" || -z "$NEW_REPO" ]]; then
   exit 1
 fi
 
+GH_TOKEN="${GH_TOKEN:-}"
+if [[ -z "$GH_TOKEN" ]]; then
+  echo "ERROR: GH_TOKEN environment variable must be set"
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+WORK_DIR="/tmp/bootstrap-$$"
+
+# Clean up working directory on exit
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+# GitHub API helper — reuses auth headers (ADR-0104 pattern)
+gh_api() {
+  curl -s \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer $GH_TOKEN" \
+    "$@"
+}
+
+# Set a GitHub Actions secret using libsodium-encrypted PUT (GitHub API requirement).
+# Tries gh CLI first, falls back to Python + PyNaCl.
+set_github_secret() {
+  local REPO="$1" NAME="$2" VALUE="$3"
+
+  if command -v gh &>/dev/null; then
+    echo -n "$VALUE" | gh secret set "$NAME" --repo "$REPO"
+    return 0
+  fi
+
+  local KEY_JSON KEY_ID PUB_KEY ENCRYPTED
+  KEY_JSON=$(gh_api "https://api.github.com/repos/$REPO/actions/secrets/public-key")
+  KEY_ID=$(echo "$KEY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['key_id'])")
+  PUB_KEY=$(echo "$KEY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])")
+
+  ENCRYPTED=$(python3 - "$VALUE" "$PUB_KEY" <<'PYEOF'
+import sys, base64
+value, pub_key = sys.argv[1], sys.argv[2]
+try:
+    from nacl.public import PublicKey, SealedBox
+    box = SealedBox(PublicKey(base64.b64decode(pub_key)))
+    print(base64.b64encode(box.encrypt(value.encode())).decode())
+except ImportError:
+    print("PyNaCl not installed", file=sys.stderr)
+    sys.exit(2)
+PYEOF
+  ) || {
+    echo "ERROR: cannot set secrets automatically — install gh CLI or PyNaCl:"
+    echo "  brew install gh   (then: gh auth login)"
+    echo "  pip install PyNaCl"
+    exit 1
+  }
+
+  HTTP_CODE=$(gh_api -s -o /dev/null -w "%{http_code}" -X PUT \
+    "https://api.github.com/repos/$REPO/actions/secrets/$NAME" \
+    -d "{\"encrypted_value\":\"$ENCRYPTED\",\"key_id\":\"$KEY_ID\"}")
+  if [[ "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
+    echo "ERROR: Failed to set secret $NAME (HTTP $HTTP_CODE)"
+    exit 1
+  fi
+}
 
 # --------------------------------------------------------------------------
 # Phase 1: Verify prerequisites
@@ -51,8 +111,8 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 echo ""
 echo "=== Phase 1: Verify Prerequisites ==="
 bash "$ROOT_DIR/scripts/verify-gate-001.sh" "$GCP_PROJECT" || exit 1
-bash "$ROOT_DIR/scripts/verify-gate-002.sh" "$GCP_PROJECT"  || exit 1
-bash "$ROOT_DIR/scripts/verify-gate-003.sh" "$GCP_PROJECT"  || exit 1
+bash "$ROOT_DIR/scripts/verify-gate-002.sh" "$GCP_PROJECT" || exit 1
+bash "$ROOT_DIR/scripts/verify-gate-003.sh" "$GCP_PROJECT" || exit 1
 echo "✓ All prerequisites verified"
 
 # --------------------------------------------------------------------------
@@ -61,16 +121,7 @@ echo "✓ All prerequisites verified"
 echo ""
 echo "=== Phase 2: Create GitHub Repository ==="
 
-# Use GitHub API with Bearer token (ADR-0104 pattern)
-GH_TOKEN="${GH_TOKEN:-}"
-if [[ -z "$GH_TOKEN" ]]; then
-  echo "ERROR: GH_TOKEN environment variable must be set"
-  exit 1
-fi
-
-HTTP_RESP=$(curl -s -w "\n%{http_code}" -X POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer $GH_TOKEN" \
+HTTP_RESP=$(gh_api -w "\n%{http_code}" -X POST \
   "https://api.github.com/repos/${ORG}/autonomous-ai-system-template/generate" \
   -d "{\"owner\":\"$ORG\",\"name\":\"$NEW_REPO\",\"private\":true,\"description\":\"Autonomous AI project created from template\"}")
 
@@ -91,9 +142,7 @@ echo "✓ GitHub repository created: $ORG/$NEW_REPO"
 echo ""
 echo "=== Phase 3: Clone Repository ==="
 
-WORK_DIR="/tmp/bootstrap-$$"
 mkdir -p "$WORK_DIR"
-
 git clone "https://x-access-token:${GH_TOKEN}@github.com/$ORG/$NEW_REPO.git" "$WORK_DIR/$NEW_REPO"
 cd "$WORK_DIR/$NEW_REPO"
 
@@ -107,13 +156,16 @@ echo "=== Phase 4: Configure Terraform ==="
 
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 
-sed -i "s|github_org.*=.*|github_org = \"$ORG\"|g"                   terraform/terraform.tfvars
-sed -i "s|gcp_project_id.*=.*|gcp_project_id = \"$GCP_PROJECT\"|g"   terraform/terraform.tfvars
-sed -i "s|enable_railway.*=.*|enable_railway = $ENABLE_RAILWAY|g"     terraform/terraform.tfvars
-sed -i "s|enable_cloudflare.*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|g" terraform/terraform.tfvars
-sed -i "s|enable_n8n.*=.*|enable_n8n = $ENABLE_N8N|g"               terraform/terraform.tfvars
+# Combine first 5 substitutions into a single sed pass
+sed -i \
+  -e "s|github_org.*=.*|github_org = \"$ORG\"|g" \
+  -e "s|gcp_project_id.*=.*|gcp_project_id = \"$GCP_PROJECT\"|g" \
+  -e "s|enable_railway.*=.*|enable_railway = $ENABLE_RAILWAY|g" \
+  -e "s|enable_cloudflare.*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|g" \
+  -e "s|enable_n8n.*=.*|enable_n8n = $ENABLE_N8N|g" \
+  terraform/terraform.tfvars
 
-# Read GitHub App ID from GCP Secret Manager
+# Read GitHub App ID from GCP Secret Manager (must come after gcloud is auth'd)
 APP_ID=$(gcloud secrets versions access latest \
   --secret="github-app-id" \
   --project="$GCP_PROJECT")
@@ -157,14 +209,10 @@ if [[ "$REPLY" =~ ^[Yy][Ee][Ss]$ ]]; then
   echo "=== Phase 7: Create GitHub Secrets ==="
   cd ..
 
-  for SECRET_NAME in "GCP_WORKLOAD_IDENTITY_PROVIDER:$WIF_PROVIDER" "GCP_SERVICE_ACCOUNT_EMAIL:$SA_EMAIL" "GITHUB_APP_ID:$APP_ID"; do
+  for SECRET_NAME in "GCP_WORKLOAD_IDENTITY_PROVIDER:$WIF_PROVIDER" "GCP_SERVICE_ACCOUNT_EMAIL:$SA_EMAIL" "GH_APP_ID:$APP_ID"; do
     NAME="${SECRET_NAME%%:*}"
     VALUE="${SECRET_NAME##*:}"
-    curl -s -X PUT \
-      -H "Accept: application/vnd.github+json" \
-      -H "Authorization: Bearer $GH_TOKEN" \
-      "https://api.github.com/repos/$ORG/$NEW_REPO/actions/secrets/$NAME" \
-      -d "{\"encrypted_value\":\"$(echo -n "$VALUE" | base64)\"}" > /dev/null
+    set_github_secret "$ORG/$NEW_REPO" "$NAME" "$VALUE"
     echo "  ✓ Secret $NAME set"
   done
 
@@ -189,9 +237,7 @@ if [[ "$REPLY" =~ ^[Yy][Ee][Ss]$ ]]; then
   echo ""
   echo "=== Phase 9: Trigger Autonomous Control Plane ==="
 
-  curl -s -X POST \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer $GH_TOKEN" \
+  gh_api -X POST \
     "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/autonomous-control-plane.yml/dispatches" \
     -d '{"ref":"main","inputs":{"skip_provider_validation":"false"}}' \
     && echo "✓ Autonomous control plane triggered" \

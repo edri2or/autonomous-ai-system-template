@@ -1,0 +1,40 @@
+name: 'Mint GitHub App Token via GCP WIF'
+description: 'Authenticates via WIF, retrieves App key from GCP Secret Manager, mints an ephemeral installation token (ADR-0100)'
+
+inputs:
+  workload_identity_provider:
+    required: true
+  service_account_email:
+    required: true
+  gh_app_id:
+    required: true
+
+outputs:
+  token:
+    description: 'GitHub App installation token'
+    value: ${{ steps.app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account_email: ${{ inputs.service_account_email }}
+
+    - uses: google-github-actions/setup-gcloud@v2
+
+    - name: Retrieve GitHub App Private Key
+      shell: bash
+      run: |
+        {
+          echo "APP_PRIVATE_KEY<<PKEOF"
+          gcloud secrets versions access latest --secret="github-app-private-key"
+          echo "PKEOF"
+        } >> "$GITHUB_ENV"
+
+    - uses: actions/create-github-app-token@v1
+      id: app-token
+      with:
+        app-id: ${{ inputs.gh_app_id }}
+        private-key: ${{ env.APP_PRIVATE_KEY }}

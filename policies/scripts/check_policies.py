@@ -10,41 +10,49 @@ import glob
 import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+THIS_FILE = os.path.abspath(__file__)
 
 errors = []
 warnings = []
 
+# Load each file set once to avoid re-reading the same files per check.
+def _load(pattern, recursive=False):
+    result = {}
+    for path in glob.glob(pattern, recursive=recursive):
+        if ".git" in path or os.path.abspath(path) == THIS_FILE:
+            continue
+        try:
+            with open(path) as f:
+                result[path] = f.read()
+        except OSError:
+            pass
+    return result
+
+WORKFLOW_FILES = _load(f"{ROOT}/.github/workflows/*.yml")
+ALL_SOURCE_FILES = {
+    p: c
+    for ext in ("*.yml", "*.yaml", "*.sh", "*.py")
+    for p, c in _load(f"{ROOT}/**/{ext}", recursive=True).items()
+}
+
 
 def check_no_secrets_inherit():
     """ADR-0101: No secrets:inherit in any workflow file."""
-    for path in glob.glob(f"{ROOT}/.github/workflows/*.yml"):
-        with open(path) as f:
-            content = f.read()
+    for path, content in WORKFLOW_FILES.items():
         if "secrets: inherit" in content:
             errors.append(f"{path}: 'secrets: inherit' found (ADR-0101 violation)")
 
 
 def check_no_mcp_github_refs():
-    """ADR-0102: No mcp__github__ references in any file."""
-    for ext in ("*.yml", "*.yaml", "*.sh", "*.py"):
-        for path in glob.glob(f"{ROOT}/**/{ext}", recursive=True):
-            if ".git" in path:
-                continue
-            with open(path) as f:
-                content = f.read()
-            if "mcp__github__" in content:
-                errors.append(f"{path}: mcp__github__ reference found (ADR-0102 violation)")
+    """ADR-0102: No mcp__github__ references in any tracked file."""
+    for path, content in ALL_SOURCE_FILES.items():
+        if "mcp__github__" in content:
+            errors.append(f"{path}: mcp__github__ reference found (ADR-0102 violation)")
 
 
 def check_github_app_pattern():
     """ADR-0100: At least one workflow uses create-github-app-token."""
-    found = False
-    for path in glob.glob(f"{ROOT}/.github/workflows/*.yml"):
-        with open(path) as f:
-            if "create-github-app-token" in f.read():
-                found = True
-                break
-    if not found:
+    if not any("create-github-app-token" in c for c in WORKFLOW_FILES.values()):
         errors.append("No workflow uses actions/create-github-app-token (ADR-0100 violation)")
 
 
@@ -55,9 +63,9 @@ def check_bearer_pattern():
         r'"token"\s*:\s*\$\{secrets\.',
         r"requests\.get\([^)]+secret",
     ]
-    for path in glob.glob(f"{ROOT}/scripts/**/*.sh", recursive=True):
-        with open(path) as f:
-            content = f.read()
+    for path, content in ALL_SOURCE_FILES.items():
+        if not path.endswith(".sh"):
+            continue
         for pattern in bad_patterns:
             if re.search(pattern, content):
                 warnings.append(f"{path}: possible inline token (check ADR-0104 compliance)")

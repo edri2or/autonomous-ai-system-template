@@ -1,25 +1,18 @@
 # GCP Secret Manager resources
 #
-# IMPORTANT: The github-app-private-key secret MUST be pre-populated before
-# running Terraform. Bootstrap script handles this via verify-gate-001.sh.
-# See docs/gates/manual-gates.md — GATE-001.
+# GATE-001 requires github-app-private-key to be pre-created in GCP SM before
+# running Terraform. We reference it as a data source to avoid a conflict on
+# apply (creating a resource that already exists returns HTTP 409).
+#
+# github-app-id is fully managed by Terraform (created + versioned here).
 
-resource "google_secret_manager_secret" "github_app_private_key" {
+data "google_secret_manager_secret" "github_app_private_key" {
   project   = var.gcp_project_id
   secret_id = "github-app-private-key"
-
-  replication {
-    auto {}
-  }
-
-  labels = {
-    purpose = "github-app-auth"
-    managed = "terraform"
-  }
 }
 
 resource "google_secret_manager_secret_iam_member" "github_app_key_access" {
-  secret_id = google_secret_manager_secret.github_app_private_key.id
+  secret_id = data.google_secret_manager_secret.github_app_private_key.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.terraform.email}"
 }

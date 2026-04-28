@@ -40,21 +40,14 @@ if [[ -z "$SM_BINDING" ]]; then
   echo "    --role=roles/secretmanager.secretAccessor"
 fi
 
-# Check WIF binding exists on service account
+# Check WIF binding using gcloud native filter (no Python subprocess)
 WIF_BINDING=$(gcloud iam service-accounts get-iam-policy "$SA_EMAIL" \
   --project="$GCP_PROJECT" \
-  --format="json" 2>/dev/null | python3 -c "
-import json, sys
-policy = json.load(sys.stdin)
-has_wif = any(
-  'workloadIdentityUser' in b.get('role', '') or
-  'iam.workloadIdentityUser' in b.get('role', '')
-  for b in policy.get('bindings', [])
-)
-print('YES' if has_wif else 'NO')
-" 2>/dev/null || echo "UNKNOWN")
+  --flatten="bindings[].members" \
+  --filter="bindings.role:roles/iam.workloadIdentityUser" \
+  --format="value(bindings.role)" 2>/dev/null || echo "")
 
-if [[ "$WIF_BINDING" == "NO" ]]; then
+if [[ -z "$WIF_BINDING" ]]; then
   echo "WARN: WIF binding (roles/iam.workloadIdentityUser) not set on service account"
   echo "This is set automatically by Terraform during bootstrap apply."
 fi
