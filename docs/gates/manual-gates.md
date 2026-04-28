@@ -250,13 +250,57 @@ Before running bootstrap:
 | GATE-003: Terraform service account | ✅ Always (or Terraform) | ✅ | ✅ | [ ] |
 | GATE-004: Telegram bot token | ⭕ If using Telegram | ✅ | ✅ | [ ] |
 | GATE-005: Railway API token | ⭕ If enable_railway | ✅ | ✅ | [ ] |
-| GATE-006: Cloudflare API token | ⭕ If enable_cloudflare | ✅ | ✅ | [ ] |
+| GATE-006: Cloudflare API token + Zone ID | ⭕ If enable_cloudflare | ✅ | ✅ | [ ] |
+| GATE-007: project_domain + n8n_admin_email | ⭕ If enable_n8n | N/A | N/A | [ ] |
 
 **Verify in Cloud Shell:**
 ```bash
 bash scripts/verify-gate-001.sh YOUR_GCP_PROJECT
 bash scripts/verify-gate-002.sh YOUR_GCP_PROJECT
 bash scripts/verify-gate-003.sh YOUR_GCP_PROJECT
+```
+
+---
+
+## GATE-007: N8N Domain and Admin Email (required if enable_n8n = true)
+
+**Status:** Configuration (no UI action needed — just prepare these two values)
+
+### What you need
+
+| Value | Description | Example |
+|---|---|---|
+| `--project-domain` | Full domain for this project (must be in your Cloudflare zone) | `myproject.or-infra.com` |
+| `--n8n-admin-email` | Admin email for N8N owner account | `admin@myproject.or-infra.com` |
+| `--n8n-subdomain` | Subdomain prefix for N8N (default: `n8n`) | `n8n` → `n8n.myproject.or-infra.com` |
+
+### How it's used
+
+`pre-bootstrap.sh` passes these directly to `deploy-n8n.yml`, which:
+1. Creates Cloudflare CNAME: `n8n.myproject.or-infra.com` → Railway auto-generated domain
+2. Registers the custom domain in Railway (via GraphQL `customDomainCreate`)
+3. Creates N8N owner account via `POST /rest/owner/setup` using `n8n-owner-password` from GCP SM
+
+**CNAME must be DNS-only (not proxied).** Railway manages TLS directly. Cloudflare proxy
+breaks the Let's Encrypt ACME challenge. This is intentional — not a misconfiguration.
+Evidence: project-life-130 ADR 0015.
+
+### Bootstrap command with N8N enabled
+
+```bash
+export GH_TOKEN="ghp_..."
+export RAILWAY_TOKEN="$(railway token create --name bootstrap)"  # Railway CLI or Dashboard
+
+bash bootstrap/pre-bootstrap.sh \
+  --new-repo my-autonomous-project \
+  --enable-railway true \
+  --enable-cloudflare true \
+  --enable-n8n true \
+  --railway-token "$RAILWAY_TOKEN" \
+  --cf-token "your-cloudflare-api-token" \
+  --cf-zone-id "your-cloudflare-zone-id" \
+  --project-domain "myproject.or-infra.com" \
+  --n8n-admin-email "admin@myproject.or-infra.com"
 ```
 
 ---

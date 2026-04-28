@@ -1,0 +1,321 @@
+name: Deploy N8N
+
+# End-to-end N8N provisioning:
+#   1. Creates Railway project + deploys N8N + Postgres services
+#   2. Injects N8N secrets from GCP Secret Manager into Railway env vars
+#   3. Registers custom domain in Railway (GraphQL customDomainCreate)
+#   4. Creates Cloudflare CNAME record (DNS-only — Railway needs direct TLS)
+#   5. Waits for N8N to start, then creates the owner account
+#
+# Evidence: project-life-130 deploy-n8n.yml (Stage 2 complete, Stage 5 Telegram E2E proven)
+# Run IDs: Stage 1 24666491474, Stage 5 24953396091
+# ADRs: 0015 (Railway+N8N), 0020 (owner/setup API), 0022 (owner password sync)
+#
+# Prerequisites (must run first):
+#   - terraform apply (creates GCP WIF + SM secret containers + IAM bindings)
+#   - populate-secrets.yml (generates N8N secrets in GCP SM)
+#   - pre-bootstrap.sh stored RAILWAY_TOKEN, CF_TOKEN, CF_ZONE_ID in GCP SM
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_domain:
+        description: "Base domain for this project (e.g. myproject.or-infra.com)"
+        required: true
+      n8n_subdomain:
+        description: "N8N subdomain prefix (e.g. 'n8n' → n8n.<project_domain>)"
+        required: false
+        default: "n8n"
+      n8n_admin_email:
+        description: "Admin email for N8N owner account"
+        required: true
+      project_name:
+        description: "Human-readable project name (used in N8N owner profile)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      N8N_DOMAIN: "${{ inputs.n8n_subdomain }}.${{ inputs.project_domain }}"
+      GRAPHQL_URL: "https://backboard.railway.com/graphql/v2"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # ── Phase 1: Fetch all required secrets from GCP Secret Manager ──────────
+      - name: Fetch secrets from GCP SM
+        id: sm
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          get_secret() {
+            gcloud secrets versions access latest \
+              --secret="$1" --project="$GCP_PROJECT" 2>/dev/null
+          }
+
+          RAILWAY_TOKEN=$(get_secret "railway-api-token")
+          echo "::add-mask::$RAILWAY_TOKEN"
+          echo "railway_token=$RAILWAY_TOKEN" >> "$GITHUB_OUTPUT"
+
+          N8N_ENCRYPTION_KEY=$(get_secret "n8n-encryption-key")
+          echo "::add-mask::$N8N_ENCRYPTION_KEY"
+          echo "n8n_encryption_key=$N8N_ENCRYPTION_KEY" >> "$GITHUB_OUTPUT"
+
+          N8N_OWNER_PASSWORD=$(get_secret "n8n-owner-password")
+          echo "::add-mask::$N8N_OWNER_PASSWORD"
+          echo "n8n_owner_password=$N8N_OWNER_PASSWORD" >> "$GITHUB_OUTPUT"
+
+          CF_TOKEN=$(get_secret "cloudflare-api-token")
+          echo "::add-mask::$CF_TOKEN"
+          echo "cf_token=$CF_TOKEN" >> "$GITHUB_OUTPUT"
+
+          CF_ZONE_ID=$(get_secret "cloudflare-zone-id")
+          echo "cf_zone_id=$CF_ZONE_ID" >> "$GITHUB_OUTPUT"
+
+      # ── Phase 2: Create Railway project + deploy N8N + Postgres ─────────────
+      - name: Create Railway project and deploy services
+        id: railway
+        env:
+          RAILWAY_TOKEN: ${{ steps.sm.outputs.railway_token }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          PROJECT_NAME: "${{ github.event.repository.name }}"
+        run: |
+          set -euo pipefail
+
+          gql() {
+            curl -sf -X POST "$GRAPHQL_URL" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$1"
+          }
+
+          echo "Creating Railway project: $PROJECT_NAME..."
+          PROJECT_RESPONSE=$(gql "{\"query\": \"mutation { projectCreate(input: {name: \\\"$PROJECT_NAME\\\"}) { id defaultEnvironment { id } } }\"}")
+          PROJECT_ID=$(echo "$PROJECT_RESPONSE" | jq -r '.data.projectCreate.id')
+          ENVIRONMENT_ID=$(echo "$PROJECT_RESPONSE" | jq -r '.data.projectCreate.defaultEnvironment.id')
+
+          if [[ "$PROJECT_ID" == "null" || -z "$PROJECT_ID" ]]; then
+            echo "ERROR: Failed to create Railway project."
+            echo "$PROJECT_RESPONSE" | jq .
+            exit 1
+          fi
+          echo "  ✅ Railway project created: $PROJECT_ID"
+
+          # Store project/environment IDs in GCP SM for future workflows (create-or-update)
+          store_id() {
+            local name="$1" value="$2"
+            printf '%s' "$value" | gcloud secrets versions add "$name" --project="$GCP_PROJECT" --data-file=- 2>/dev/null || \
+            printf '%s' "$value" | gcloud secrets create "$name" --project="$GCP_PROJECT" --replication-policy=automatic --data-file=-
+          }
+          store_id "railway-project-id"    "$PROJECT_ID"
+          store_id "railway-environment-id" "$ENVIRONMENT_ID"
+
+          # Deploy Postgres service
+          echo "Deploying Postgres..."
+          PG_RESPONSE=$(gql "{\"query\": \"mutation { serviceCreate(input: {name: \\\"postgres\\\", projectId: \\\"$PROJECT_ID\\\", source: {image: \\\"postgres:15\\\"}}) { id } }\"}")
+          PG_SERVICE_ID=$(echo "$PG_RESPONSE" | jq -r '.data.serviceCreate.id')
+          echo "  ✅ Postgres service: $PG_SERVICE_ID"
+
+          # Deploy N8N service
+          echo "Deploying N8N..."
+          N8N_RESPONSE=$(gql "{\"query\": \"mutation { serviceCreate(input: {name: \\\"n8n\\\", projectId: \\\"$PROJECT_ID\\\", source: {image: \\\"n8nio/n8n:latest\\\"}}) { id } }\"}")
+          N8N_SERVICE_ID=$(echo "$N8N_RESPONSE" | jq -r '.data.serviceCreate.id')
+          echo "  ✅ N8N service: $N8N_SERVICE_ID"
+
+          echo "project_id=$PROJECT_ID"       >> "$GITHUB_OUTPUT"
+          echo "environment_id=$ENVIRONMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "n8n_service_id=$N8N_SERVICE_ID" >> "$GITHUB_OUTPUT"
+
+      # ── Phase 3: Inject N8N env vars (including sensitive secrets from GCP SM) ─
+      - name: Configure N8N environment variables
+        env:
+          RAILWAY_TOKEN: ${{ steps.sm.outputs.railway_token }}
+          N8N_ENCRYPTION_KEY: ${{ steps.sm.outputs.n8n_encryption_key }}
+          PROJECT_ID: ${{ steps.railway.outputs.project_id }}
+          ENVIRONMENT_ID: ${{ steps.railway.outputs.environment_id }}
+          N8N_SERVICE_ID: ${{ steps.railway.outputs.n8n_service_id }}
+        run: |
+          set -euo pipefail
+
+          set_var() {
+            local name="$1" value="$2"
+            curl -sf -X POST "$GRAPHQL_URL" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": \"mutation { variableUpsert(input: {projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", name: \\\"$name\\\", value: \\\"$value\\\"}) }\"}" \
+              > /dev/null
+          }
+
+          echo "Setting N8N environment variables..."
+          set_var "N8N_HOST"              "0.0.0.0"
+          set_var "N8N_PORT"              "5678"
+          set_var "N8N_PROTOCOL"          "https"
+          set_var "WEBHOOK_URL"           "https://${{ env.N8N_DOMAIN }}/"
+          set_var "N8N_EDITOR_BASE_URL"   "https://${{ env.N8N_DOMAIN }}"
+          set_var "DB_TYPE"               "postgresdb"
+          set_var "DATABASE_URL"          "\${{Postgres.DATABASE_URL}}"
+          set_var "N8N_ENCRYPTION_KEY"    "$N8N_ENCRYPTION_KEY"
+          echo "  ✅ N8N env vars configured (encryption key masked in logs)"
+
+      # ── Phase 4: Register custom domain in Railway ───────────────────────────
+      - name: Register N8N custom domain in Railway
+        id: domain
+        env:
+          RAILWAY_TOKEN: ${{ steps.sm.outputs.railway_token }}
+          N8N_SERVICE_ID: ${{ steps.railway.outputs.n8n_service_id }}
+          ENVIRONMENT_ID: ${{ steps.railway.outputs.environment_id }}
+        run: |
+          set -euo pipefail
+
+          echo "Registering custom domain: ${{ env.N8N_DOMAIN }}..."
+          DOMAIN_RESPONSE=$(curl -sf -X POST "$GRAPHQL_URL" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\": \"mutation { customDomainCreate(input: {domain: \\\"${{ env.N8N_DOMAIN }}\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\"}) { id cnameCheck { link } } }\"}")
+
+          CNAME_TARGET=$(echo "$DOMAIN_RESPONSE" | jq -r '.data.customDomainCreate.cnameCheck.link // empty')
+
+          if [[ -z "$CNAME_TARGET" ]]; then
+            echo "WARNING: Could not extract CNAME target from Railway response."
+            echo "$DOMAIN_RESPONSE" | jq .
+            # Fall back to querying the service domain
+            CNAME_TARGET=$(curl -sf -X POST "$GRAPHQL_URL" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": \"query { service(id: \\\"$N8N_SERVICE_ID\\\") { domains { domain } } }\"}" \
+              | jq -r '.data.service.domains[0].domain // empty')
+          fi
+
+          echo "  ✅ Custom domain registered. CNAME target: $CNAME_TARGET"
+          echo "cname_target=$CNAME_TARGET" >> "$GITHUB_OUTPUT"
+
+      # ── Phase 5: Create Cloudflare CNAME (DNS-only, not proxied) ────────────
+      #
+      # IMPORTANT: proxied must be false.
+      # Railway issues its own Let's Encrypt certificate and needs a direct TLS
+      # connection to the origin. Cloudflare proxy breaks the ACME challenge.
+      # Evidence: project-life-130 ADR 0015 (N8N Railway deployment)
+      - name: Create Cloudflare CNAME for N8N
+        env:
+          CF_TOKEN: ${{ steps.sm.outputs.cf_token }}
+          CF_ZONE_ID: ${{ steps.sm.outputs.cf_zone_id }}
+          CNAME_TARGET: ${{ steps.domain.outputs.cname_target }}
+        run: |
+          set -euo pipefail
+
+          N8N_SUBDOMAIN="${{ inputs.n8n_subdomain }}"
+
+          echo "Creating Cloudflare CNAME: $N8N_SUBDOMAIN → $CNAME_TARGET (DNS-only)..."
+
+          # Check if record already exists
+          EXISTING=$(curl -sf \
+            "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?type=CNAME&name=${{ env.N8N_DOMAIN }}" \
+            -H "Authorization: Bearer $CF_TOKEN" | jq -r '.result[0].id // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            # Update existing record
+            curl -sf -X PATCH \
+              "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$EXISTING" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"type\":\"CNAME\",\"name\":\"$N8N_SUBDOMAIN\",\"content\":\"$CNAME_TARGET\",\"ttl\":1,\"proxied\":false}" \
+              > /dev/null
+            echo "  ✅ CNAME updated: ${{ env.N8N_DOMAIN }} → $CNAME_TARGET"
+          else
+            # Create new record
+            curl -sf -X POST \
+              "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"type\":\"CNAME\",\"name\":\"$N8N_SUBDOMAIN\",\"content\":\"$CNAME_TARGET\",\"ttl\":1,\"proxied\":false}" \
+              > /dev/null
+            echo "  ✅ CNAME created: ${{ env.N8N_DOMAIN }} → $CNAME_TARGET"
+          fi
+
+      # ── Phase 6: Wait for N8N to start, then create owner account ───────────
+      #
+      # N8N v1.0+ uses POST /rest/owner/setup for first-time admin creation.
+      # N8N_BASIC_AUTH_* vars were removed in v1.0 (project-life-130 ADR 0020).
+      # If showSetupOnFirstLoad = false, the owner was already set up — skip.
+      - name: Wait for N8N startup and create owner account
+        env:
+          N8N_OWNER_PASSWORD: ${{ steps.sm.outputs.n8n_owner_password }}
+        run: |
+          set -euo pipefail
+
+          N8N_URL="https://${{ env.N8N_DOMAIN }}"
+          ADMIN_EMAIL="${{ inputs.n8n_admin_email }}"
+          PROJECT_NAME="${{ inputs.project_name != '' && inputs.project_name || github.event.repository.name }}"
+
+          echo "Waiting for N8N to become ready at $N8N_URL ..."
+          ATTEMPTS=0
+          until curl -sf "$N8N_URL/healthz" > /dev/null 2>&1; do
+            ATTEMPTS=$((ATTEMPTS + 1))
+            if [[ $ATTEMPTS -ge 30 ]]; then
+              echo "ERROR: N8N did not become ready after 5 minutes."
+              exit 1
+            fi
+            echo "  Attempt $ATTEMPTS/30 — waiting 10s..."
+            sleep 10
+          done
+          echo "  ✅ N8N is up"
+
+          # Check if owner setup is required
+          SETUP_REQUIRED=$(curl -sf "$N8N_URL/rest/settings" \
+            | jq -r '.data.showSetupOnFirstLoad // false')
+
+          if [[ "$SETUP_REQUIRED" == "true" ]]; then
+            echo "Creating N8N owner account for $ADMIN_EMAIL..."
+
+            # Mask password before logging
+            echo "::add-mask::$N8N_OWNER_PASSWORD"
+
+            SETUP_RESPONSE=$(curl -sf -X POST "$N8N_URL/rest/owner/setup" \
+              -H "Content-Type: application/json" \
+              -c /tmp/n8n-cookies.txt \
+              -d "{\"email\":\"$ADMIN_EMAIL\",\"firstName\":\"$PROJECT_NAME\",\"lastName\":\"Admin\",\"password\":\"$N8N_OWNER_PASSWORD\",\"agree\":true}")
+
+            if echo "$SETUP_RESPONSE" | jq -e '.data.id' > /dev/null 2>&1; then
+              echo "  ✅ N8N owner account created: $ADMIN_EMAIL"
+            else
+              echo "WARNING: Owner setup response unexpected — check N8N manually."
+              echo "$SETUP_RESPONSE" | jq '.message // .' 2>/dev/null || true
+            fi
+          else
+            echo "  ✅ N8N owner already configured — skipping setup."
+          fi
+
+          rm -f /tmp/n8n-cookies.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║  N8N Deployment Complete                                 ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          printf  "║  N8N URL:  https://%-38s ║\n" "${{ env.N8N_DOMAIN }}"
+          printf  "║  Admin:    %-46s ║\n" "${{ inputs.n8n_admin_email }}"
+          echo "║  Password: stored in GCP SM → n8n-owner-password        ║"
+          echo "║                                                          ║"
+          echo "║  Next steps:                                             ║"
+          echo "║    1. Login to N8N and verify owner account              ║"
+          echo "║    2. Import workflows from workflows/n8n/ (if any)      ║"
+          echo "║    3. Configure Telegram bot token in N8N                ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
