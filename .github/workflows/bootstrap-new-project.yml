@@ -1,0 +1,108 @@
+name: Bootstrap New Project
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_repo:
+        description: 'New repository name (e.g. my-autonomous-project)'
+        required: true
+        type: string
+      gcp_project:
+        description: 'GCP project ID'
+        required: true
+        type: string
+      enable_railway:
+        description: 'Enable Railway integration'
+        required: false
+        default: 'false'
+        type: string
+      enable_cloudflare:
+        description: 'Enable Cloudflare integration'
+        required: false
+        default: 'false'
+        type: string
+      enable_n8n:
+        description: 'Enable N8N integration'
+        required: false
+        default: 'false'
+        type: string
+      apply:
+        description: 'Apply Terraform (check = apply, uncheck = plan only)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  bootstrap:
+    name: Bootstrap New Autonomous Project
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # INITIAL GCP AUTH: Uses a temporary Service Account key stored as GCP_BOOTSTRAP_SA_KEY.
+      # Prerequisites:
+      #   1. Create a GCP service account with roles: Secret Manager Admin, WIF Pool Admin, Project IAM Admin
+      #   2. Download its JSON key from GCP Console
+      #   3. Store the full JSON content as GitHub secret GCP_BOOTSTRAP_SA_KEY
+      # After bootstrap succeeds and WIF is verified working, delete GCP_BOOTSTRAP_SA_KEY.
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_BOOTSTRAP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.0'
+
+      - name: Verify prerequisites
+        run: |
+          bash scripts/verify-gate-001.sh "${{ inputs.gcp_project }}"
+          bash scripts/verify-gate-002.sh "${{ inputs.gcp_project }}" || echo "GATE-002: WIF not pre-created — Terraform will create it"
+          bash scripts/verify-gate-003.sh "${{ inputs.gcp_project }}" || echo "GATE-003: SA not pre-created — Terraform will create it"
+
+      - name: Run bootstrap
+        env:
+          GH_TOKEN: ${{ secrets.GH_BOOTSTRAP_PAT }}
+        run: |
+          APPLY_FLAG=""
+          if [[ "${{ inputs.apply }}" == "true" ]]; then
+            APPLY_FLAG="--yes"
+          fi
+          bash bootstrap/bootstrap-new-project.sh \
+            --org "${{ github.repository_owner }}" \
+            --gcp-project "${{ inputs.gcp_project }}" \
+            --new-repo "${{ inputs.new_repo }}" \
+            --enable-railway "${{ inputs.enable_railway }}" \
+            --enable-cloudflare "${{ inputs.enable_cloudflare }}" \
+            --enable-n8n "${{ inputs.enable_n8n }}" \
+            ${APPLY_FLAG}
+
+      - name: Post-bootstrap instructions
+        if: success() && inputs.apply
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "Bootstrap COMPLETE"
+          echo "New repo: https://github.com/${{ github.repository_owner }}/${{ inputs.new_repo }}"
+          echo ""
+          echo "NEXT STEPS:"
+          echo "  1. Monitor Actions: https://github.com/${{ github.repository_owner }}/${{ inputs.new_repo }}/actions"
+          echo "  2. Confirm autonomous-control-plane.yml passes"
+          echo "  3. Confirm ADR-0200 project charter was created"
+          echo ""
+          echo "SECURITY: After verifying WIF works end-to-end, delete the"
+          echo "GCP_BOOTSTRAP_SA_KEY GitHub secret — it is no longer needed."
+          echo "All future runs will authenticate via WIF (keyless)."
+          echo "================================================================"

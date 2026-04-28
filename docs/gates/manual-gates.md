@@ -5,20 +5,38 @@ Each gate has a corresponding verification script in `scripts/`.
 
 ---
 
+## Execution Environments — No Local Machine Required
+
+All gates can be completed using **browser-only tools**. There are two paths:
+
+| Path | When to use | Tools |
+|------|-------------|-------|
+| **A: GCP Cloud Shell** | Preferred — authenticated to GCP automatically | Browser terminal at https://shell.cloud.google.com |
+| **B: GCP Console + GitHub Actions** | Fully web-UI driven | GCP Console web UI + GitHub web UI |
+
+**GCP Cloud Shell** is a browser-based terminal pre-authenticated to your GCP project.
+It has `gcloud` and `git` pre-installed. `terraform` can be installed in one command (see below).
+Open it at: https://shell.cloud.google.com
+
+All `gcloud` commands in this document work identically in Cloud Shell and locally.
+
+---
+
 ## GATE-001: GitHub App Creation
 
-**Status:** Manual (GitHub UI required)  
+**Status:** Manual (GitHub web UI required)
 **Verified by:** `scripts/verify-gate-001.sh`
 
-### Steps
+### Step 1 — Create the GitHub App (GitHub web UI)
 
 1. Go to **GitHub Developer Settings → GitHub Apps → New GitHub App**
-   - URL: https://github.com/organizations/YOUR_ORG/settings/apps/new
+   - URL: `https://github.com/organizations/YOUR_ORG/settings/apps/new`
+   - (Personal accounts: `https://github.com/settings/apps/new`)
 
 2. Configure the app:
    - **Name:** `YOUR_ORG-autonomous-bootstrap`
    - **Homepage URL:** `https://github.com/YOUR_ORG`
-   - **Webhook:** Disabled (or set to your webhook endpoint)
+   - **Webhook:** Disabled
    - **Repository permissions:**
      - Contents: Read & Write
      - Metadata: Read
@@ -30,33 +48,46 @@ Each gate has a corresponding verification script in `scripts/`.
 
 3. Click **Create GitHub App**
 
-4. Note the **App ID** (shown on the app settings page, e.g., `123456`)
+4. Note the **App ID** (shown at the top of the app settings page, e.g., `123456`)
 
-5. Scroll to **Private keys** → **Generate a private key** → download `.pem` file
+5. Scroll to **Private keys** → **Generate a private key** → a `.pem` file downloads to your browser
 
-6. Store in GCP Secret Manager:
-   ```bash
-   gcloud secrets create github-app-private-key \
-     --replication-policy=automatic \
-     --data-file=app-key.pem \
-     --project=YOUR_GCP_PROJECT
+### Step 2 — Store the private key in GCP Secret Manager
 
-   echo -n "123456" | gcloud secrets versions add github-app-id \
-     --data-file=- \
-     --project=YOUR_GCP_PROJECT
-   ```
-   (create `github-app-id` secret first if it doesn't exist)
+**Option A — GCP Cloud Shell:**
+```bash
+# Upload the .pem file to Cloud Shell first (Cloud Shell menu → Upload)
+gcloud secrets create github-app-private-key \
+  --replication-policy=automatic \
+  --data-file=app-key.pem \
+  --project=YOUR_GCP_PROJECT
 
-7. **Delete the local .pem file** — it is now in Secret Manager:
-   ```bash
-   rm app-key.pem
-   ```
+# Store the App ID
+echo -n "123456" | gcloud secrets versions add github-app-id \
+  --data-file=- \
+  --project=YOUR_GCP_PROJECT
+```
 
-8. Install the app on the target repository:
-   - Go to the app settings → Install App → select org → select repository
+**Option B — GCP Console web UI (no terminal needed):**
+1. Go to [GCP Console → Secret Manager](https://console.cloud.google.com/security/secret-manager)
+2. Click **Create Secret**
+   - Name: `github-app-private-key`
+   - Secret value: paste the contents of the `.pem` file
+   - Click **Create Secret**
+3. Repeat for `github-app-id`: secret value = your App ID number (e.g., `123456`)
+
+### Step 3 — Delete the local .pem file
+
+The key is now in Secret Manager. Delete the downloaded `.pem` file from your browser's Downloads folder.
+
+### Step 4 — Install the app
+
+Go to the app settings → **Install App** → select org → select repository (or all repositories).
 
 ### Verification
+
 ```bash
+# Run in GCP Cloud Shell:
 bash scripts/verify-gate-001.sh YOUR_GCP_PROJECT
 ```
 
@@ -64,14 +95,13 @@ bash scripts/verify-gate-001.sh YOUR_GCP_PROJECT
 
 ## GATE-002: GCP WIF Pool and Provider
 
-**Status:** Manual (gcloud CLI required) OR automated by Terraform  
+**Status:** Manual (gcloud CLI required, or automated by Terraform)
 **Verified by:** `scripts/verify-gate-002.sh`
 
-The WIF pool and provider can be created manually OR by Terraform during bootstrap.
-If running Terraform for the first time, skip this gate — Terraform creates them.
+> **Note:** If you plan to let Terraform create the WIF pool during bootstrap, skip this gate.
+> Terraform handles GATE-002 automatically on first apply.
 
-If you need to pre-create them (e.g., to verify permissions first):
-
+**Option A — GCP Cloud Shell:**
 ```bash
 gcloud iam workload-identity-pools create github-pool \
   --project=YOUR_GCP_PROJECT \
@@ -87,8 +117,25 @@ gcloud iam workload-identity-pools providers create-oidc github-provider \
   --attribute-condition="assertion.repository == 'YOUR_ORG/YOUR_REPO' && assertion.ref == 'refs/heads/main'"
 ```
 
+**Option B — GCP Console web UI:**
+1. Go to [IAM & Admin → Workload Identity Federation](https://console.cloud.google.com/iam-admin/workload-identity-pools)
+2. Click **Create Pool** → name: `github-pool` → Continue
+3. Add Provider → **OpenID Connect (OIDC)**
+   - Provider name: `github-provider`
+   - Issuer URL: `https://token.actions.githubusercontent.com`
+4. Configure attribute mapping:
+   - `google.subject` = `assertion.sub`
+   - `assertion.repository` = `assertion.repository`
+   - `assertion.ref` = `assertion.ref`
+5. Add attribute condition:
+   ```
+   assertion.repository == 'YOUR_ORG/YOUR_REPO' && assertion.ref == 'refs/heads/main'
+   ```
+
 ### Verification
+
 ```bash
+# Run in GCP Cloud Shell:
 bash scripts/verify-gate-002.sh YOUR_GCP_PROJECT
 ```
 
@@ -96,12 +143,13 @@ bash scripts/verify-gate-002.sh YOUR_GCP_PROJECT
 
 ## GATE-003: Terraform Service Account
 
-**Status:** Manual (gcloud CLI required) OR automated by Terraform  
+**Status:** Manual (gcloud CLI required, or automated by Terraform)
 **Verified by:** `scripts/verify-gate-003.sh`
 
-The service account can be created manually OR by Terraform (recommended — Terraform handles all IAM bindings).
+> **Note:** Terraform creates and configures the service account automatically.
+> Only run this gate manually if you need to verify permissions before applying.
 
-To pre-create manually:
+**Option A — GCP Cloud Shell:**
 ```bash
 gcloud iam service-accounts create terraform-bootstrap \
   --project=YOUR_GCP_PROJECT \
@@ -112,8 +160,18 @@ gcloud projects add-iam-policy-binding YOUR_GCP_PROJECT \
   --role="roles/secretmanager.secretAccessor"
 ```
 
+**Option B — GCP Console web UI:**
+1. Go to [IAM & Admin → Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
+2. Click **Create Service Account**
+   - Name: `terraform-bootstrap`
+   - Click **Create and Continue**
+3. Add role: **Secret Manager Secret Accessor**
+4. Click **Done**
+
 ### Verification
+
 ```bash
+# Run in GCP Cloud Shell:
 bash scripts/verify-gate-003.sh YOUR_GCP_PROJECT
 ```
 
@@ -123,67 +181,89 @@ bash scripts/verify-gate-003.sh YOUR_GCP_PROJECT
 
 **Status:** Manual (BotFather required, only if using Telegram integration)
 
-1. Open Telegram and message **@BotFather**
-2. Send `/newbot`
-3. Choose a name and username for your bot
-4. BotFather returns a token like `123456789:ABCDefGhIJklmnoPQRsTUVwxYZ`
-5. Store in GCP Secret Manager:
-   ```bash
-   echo -n "YOUR_BOT_TOKEN" | gcloud secrets versions add telegram-bot-token \
-     --data-file=- \
-     --project=YOUR_GCP_PROJECT
-   ```
+1. Open Telegram → message **@BotFather** → send `/newbot`
+2. Choose a name and username → BotFather returns a token like `123456789:ABCDef...`
+
+**Store in GCP Secret Manager:**
+
+Option A — Cloud Shell:
+```bash
+echo -n "YOUR_BOT_TOKEN" | gcloud secrets versions add telegram-bot-token \
+  --data-file=- \
+  --project=YOUR_GCP_PROJECT
+```
+
+Option B — GCP Console: Secret Manager → `telegram-bot-token` → Add Version → paste token
 
 ---
 
 ## GATE-005: Railway API Token (Optional)
 
-**Status:** Manual (Railway dashboard required, only if `enable_railway = true`)
+**Status:** Manual (Railway dashboard, only if `enable_railway = true`)
 
-1. Log in to Railway: https://railway.app/account/tokens
+1. Go to [Railway → Account → Tokens](https://railway.app/account/tokens)
 2. Create a new token with workspace scope
-3. Store in GCP Secret Manager:
-   ```bash
-   echo -n "YOUR_RAILWAY_TOKEN" | gcloud secrets versions add railway-api-token \
-     --data-file=- \
-     --project=YOUR_GCP_PROJECT
-   ```
+
+**Store in GCP Secret Manager:**
+
+Option A — Cloud Shell:
+```bash
+echo -n "YOUR_RAILWAY_TOKEN" | gcloud secrets versions add railway-api-token \
+  --data-file=- \
+  --project=YOUR_GCP_PROJECT
+```
+
+Option B — GCP Console: Secret Manager → `railway-api-token` → Add Version → paste token
 
 ---
 
 ## GATE-006: Cloudflare API Token (Optional)
 
-**Status:** Manual (Cloudflare dashboard required, only if `enable_cloudflare = true`)
+**Status:** Manual (Cloudflare dashboard, only if `enable_cloudflare = true`)
 
-1. Log in to Cloudflare: https://dash.cloudflare.com/profile/api-tokens
-2. Create a token with permissions:
+1. Go to [Cloudflare → Profile → API Tokens](https://dash.cloudflare.com/profile/api-tokens)
+2. Create token with:
    - **Account → Workers Scripts**: Edit
-   - **Zone → Workers Routes**: Edit (for your target zone)
-3. Store in GCP Secret Manager:
-   ```bash
-   echo -n "YOUR_CF_TOKEN" | gcloud secrets versions add cloudflare-api-token \
-     --data-file=- \
-     --project=YOUR_GCP_PROJECT
-   ```
+   - **Zone → Workers Routes**: Edit (for your zone)
+
+**Store in GCP Secret Manager:**
+
+Option A — Cloud Shell:
+```bash
+echo -n "YOUR_CF_TOKEN" | gcloud secrets versions add cloudflare-api-token \
+  --data-file=- \
+  --project=YOUR_GCP_PROJECT
+```
+
+Option B — GCP Console: Secret Manager → `cloudflare-api-token` → Add Version → paste token
 
 ---
 
 ## Gate Checklist (Bootstrap Readiness)
 
-Before running `bootstrap/bootstrap-new-project.sh`:
+Before running bootstrap:
 
-| Gate | Required | Status |
-|------|----------|--------|
-| GATE-001: GitHub App + private key in GCP SM | ✅ Always | [ ] |
-| GATE-002: GCP WIF pool (or Terraform will create) | ✅ Always | [ ] |
-| GATE-003: Terraform service account (or Terraform will create) | ✅ Always | [ ] |
-| GATE-004: Telegram bot token | ⭕ If using Telegram | [ ] |
-| GATE-005: Railway API token | ⭕ If enable_railway | [ ] |
-| GATE-006: Cloudflare API token | ⭕ If enable_cloudflare | [ ] |
+| Gate | Required | Cloud Shell | Console UI | Status |
+|------|----------|-------------|------------|--------|
+| GATE-001: GitHub App + key in GCP SM | ✅ Always | ✅ | ✅ | [ ] |
+| GATE-002: GCP WIF pool | ✅ Always (or Terraform) | ✅ | ✅ | [ ] |
+| GATE-003: Terraform service account | ✅ Always (or Terraform) | ✅ | ✅ | [ ] |
+| GATE-004: Telegram bot token | ⭕ If using Telegram | ✅ | ✅ | [ ] |
+| GATE-005: Railway API token | ⭕ If enable_railway | ✅ | ✅ | [ ] |
+| GATE-006: Cloudflare API token | ⭕ If enable_cloudflare | ✅ | ✅ | [ ] |
 
-Run verification:
+**Verify in Cloud Shell:**
 ```bash
 bash scripts/verify-gate-001.sh YOUR_GCP_PROJECT
 bash scripts/verify-gate-002.sh YOUR_GCP_PROJECT
 bash scripts/verify-gate-003.sh YOUR_GCP_PROJECT
 ```
+
+---
+
+## Running Bootstrap
+
+After all required gates pass, choose your bootstrap method:
+
+- **No machine → GitHub Actions workflow:** See [`.github/workflows/bootstrap-new-project.yml`](../.github/workflows/bootstrap-new-project.yml) — trigger via GitHub web UI → Actions → Bootstrap New Project → Run workflow
+- **GCP Cloud Shell:** See [`docs/guides/cloud-native-bootstrap.md`](../guides/cloud-native-bootstrap.md)

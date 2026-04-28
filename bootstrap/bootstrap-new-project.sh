@@ -24,6 +24,7 @@ NEW_REPO=""
 ENABLE_RAILWAY="false"
 ENABLE_CLOUDFLARE="false"
 ENABLE_N8N="false"
+AUTO_APPROVE="${AUTO_APPROVE:-false}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -33,12 +34,14 @@ while [[ $# -gt 0 ]]; do
     --enable-railway)   ENABLE_RAILWAY="$2";   shift 2 ;;
     --enable-cloudflare) ENABLE_CLOUDFLARE="$2"; shift 2 ;;
     --enable-n8n)       ENABLE_N8N="$2";       shift 2 ;;
+    --yes|-y)           AUTO_APPROVE="true";   shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
 
 if [[ -z "$ORG" || -z "$GCP_PROJECT" || -z "$NEW_REPO" ]]; then
   echo "Usage: $0 --org ORG --gcp-project PROJECT --new-repo REPO [options]"
+  echo "  --yes / -y    Auto-approve Terraform apply (required for non-interactive use)"
   exit 1
 fi
 
@@ -187,8 +190,12 @@ echo ""
 echo "✓ Terraform plan complete (review output above)"
 
 echo ""
-read -r -p "Apply Terraform plan? (yes/no) " REPLY
-echo ""
+if [[ "$AUTO_APPROVE" == "true" ]]; then
+  REPLY="yes"
+else
+  read -r -p "Apply Terraform plan? (yes/no) " REPLY
+  echo ""
+fi
 
 if [[ "$REPLY" =~ ^[Yy][Ee][Ss]$ ]]; then
 
