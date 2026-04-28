@@ -4,6 +4,18 @@
 This repository (`edri2or/autonomous-ai-system-template`) is the FINAL TEMPLATE.
 It is a production-ready framework for building autonomous agents with security-first architecture.
 
+## Hard Rules (Never Break)
+
+- **NEVER ask the user to set a GitHub secret manually.** All GitHub secrets are set
+  programmatically by `bootstrap/pre-bootstrap.sh` or Claude Code sessions via the GitHub API.
+- **NEVER ask the user to download a service account key.** Cloud Shell uses Application Default
+  Credentials (ADC); SA keys must not be created or stored for bootstrap operations.
+- **NEVER ask the user to navigate GitHub Settings** beyond (1) creating a GitHub App via the URL
+  shown by `pre-bootstrap.sh` and clicking "Create", and (2) clicking "Install" to approve it.
+- **NEVER store an SA key in GitHub Secrets.** WIF (Workload Identity Federation) is the only
+  allowed mechanism for GitHub Actions → GCP authentication after bootstrap completes.
+- NEVER print, commit, log, or expose token/secret/PEM values.
+
 ## Core Principles
 
 ### Documentation Enforcement
@@ -70,6 +82,6 @@ Code, file names, commands, and technical identifiers remain in English.
 
 ---
 
-**Status**: Alpha (v0.1.0-phase-6-architecture)  
-**Last Updated**: 2026-04-28  
+**Status**: Alpha (v0.4.0-alpha)
+**Last Updated**: 2026-04-28
 **License**: Apache 2.0
