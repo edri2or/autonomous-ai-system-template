@@ -45,6 +45,7 @@ on:
 
 jobs:
   bootstrap:
+    if: github.event_name == 'workflow_dispatch'
     name: Bootstrap New Autonomous Project
     runs-on: ubuntu-latest
 
