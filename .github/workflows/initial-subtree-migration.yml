@@ -1,0 +1,46 @@
+name: Initial Subtree Migration (Run Once)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Remove existing ADR directory (required before subtree add)
+        run: |
+          git rm -r docs/adr
+          git rm -r docs/architecture
+          git commit -m "chore: remove pre-subtree copies (will be replaced by subtree)"
+
+      - name: Add ADR as subtree
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          git subtree add \
+            --prefix=docs/adr \
+            https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+            adr-export --squash
+
+      - name: Add Architecture as subtree
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          git subtree add \
+            --prefix=docs/architecture \
+            https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+            arch-export --squash
+
+      - name: Push
+        run: git push origin main

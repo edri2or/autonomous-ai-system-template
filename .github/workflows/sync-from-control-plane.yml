@@ -1,0 +1,43 @@
+name: Sync Docs from Control Plane
+
+on:
+  repository_dispatch:
+    types: [docs-updated]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Pull ADR subtree
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          git subtree pull \
+            https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+            adr-export --squash \
+            -m "sync: ADRs from control-plane (${{ github.event.client_payload.source_sha }})"
+
+      - name: Pull Architecture subtree
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          git subtree pull \
+            https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+            arch-export --squash \
+            -m "sync: architecture docs from control-plane"
+
+      - name: Push result
+        run: git push origin main
