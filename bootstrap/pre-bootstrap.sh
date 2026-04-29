@@ -21,7 +21,7 @@
 # Optional overrides (auto-detected if omitted):
 #   --gcp-project         GCP_PROJECT_ID        (default: current gcloud project)
 #   --org                 GITHUB_ORG            (default: owner of this template repo)
-#   --secrets-hub-project HUB_PROJECT_ID        (default: or-infra-admin-hub)
+#   --secrets-hub-project HUB_PROJECT_ID        (default: or-infra-templet-admin)
 #   --enable-railway      true|false
 #   --enable-cloudflare   true|false
 #   --enable-n8n          true|false
@@ -42,7 +42,7 @@ ENABLE_RAILWAY="false"; ENABLE_CLOUDFLARE="false"; ENABLE_N8N="false"
 RAILWAY_TOKEN=""; CF_TOKEN=""; CF_ZONE_ID=""
 PROJECT_DOMAIN=""; N8N_SUBDOMAIN="n8n"; N8N_ADMIN_EMAIL=""
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
-SECRETS_HUB_PROJECT="or-infra-admin-hub"
+SECRETS_HUB_PROJECT="or-infra-templet-admin"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -506,6 +506,3 @@ fi
 echo "║                                                          ║"
 echo "║  Next: wait for workflows to complete in GitHub Actions  ║"
 echo "╚══════════════════════════════════════════════════════════╝"
-
-
-

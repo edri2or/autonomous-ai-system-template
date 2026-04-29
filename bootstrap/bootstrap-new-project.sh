@@ -9,6 +9,7 @@
 #     --org        <github-org>         \
 #     --gcp-project <gcp-project-id>    \
 #     --new-repo   <new-repo-name>      \
+#     [--secrets-hub-project <hub-project-id>]  (default: or-infra-templet-admin) \
 #     [--enable-railway    true|false]  \
 #     [--enable-cloudflare true|false]  \
 #     [--enable-n8n        true|false]
@@ -25,7 +26,7 @@ ENABLE_RAILWAY="false"
 ENABLE_CLOUDFLARE="false"
 ENABLE_N8N="false"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
-SECRETS_HUB_PROJECT="or-infra-admin-hub"
+SECRETS_HUB_PROJECT="or-infra-templet-admin"
 
 while [[ $# -gt 0 ]]; do
   case $1 in

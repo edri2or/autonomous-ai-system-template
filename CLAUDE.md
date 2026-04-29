@@ -1,87 +1,44 @@
-# CLAUDE.md — Autonomous AI System Template
+# Phase 9 Bootstrap — Operational Memory
 
-## Identity
-This repository (`edri2or/autonomous-ai-system-template`) is the FINAL TEMPLATE.
-It is a production-ready framework for building autonomous agents with security-first architecture.
+**Status:** ACTIVE (2026-04-29)  
+**Secrets Hub Project:** or-infra-templet-admin
 
-## Hard Rules (Never Break)
+## Quick Reference
 
-- **NEVER ask the user to set a GitHub secret manually.** All GitHub secrets are set
-  programmatically by `bootstrap/pre-bootstrap.sh` or Claude Code sessions via the GitHub API.
-- **NEVER ask the user to download a service account key.** Cloud Shell uses Application Default
-  Credentials (ADC); SA keys must not be created or stored for bootstrap operations.
-- **NEVER ask the user to navigate GitHub Settings** beyond (1) creating a GitHub App via the URL
-  shown by `pre-bootstrap.sh` and clicking "Create", and (2) clicking "Install" to approve it.
-- **NEVER store an SA key in GitHub Secrets.** WIF (Workload Identity Federation) is the only
-  allowed mechanism for GitHub Actions → GCP authentication after bootstrap completes.
-- NEVER print, commit, log, or expose token/secret/PEM values.
+**Default secrets hub:** `or-infra-templet-admin` (project ID: 974960215714)
 
-## Core Principles
+**Bootstrap scripts use this as default:**
+- `bootstrap/pre-bootstrap.sh` — Cloud Shell one-command bootstrap
+- `bootstrap/bootstrap-new-project.sh` — Post-gate new project creation
 
-### Documentation Enforcement
-- **CLAUDE.md**: Hot memory rules and project identity (this file)
-- **ADRs**: Architecture Decision Records (docs/adr/) — all major decisions logged with rationale
-- **JOURNEY.md**: Per-session progress tracking (project-specific)
-- **Artifacts**: Committed implementation evidence (Terraform, workflows, code)
+**Override if needed:**
+```bash
+./bootstrap/pre-bootstrap.sh --secrets-hub-project <custom-project-id>
+```
 
-### Security Model
-- GitHub App tokens (never classic PATs)
-- GCP Secret Manager for credential storage
-- Explicit secret passing (never secrets:inherit)
-- Workload Identity Federation for credential-less GCP access
-- Per-secret IAM bindings (least privilege)
+## Secrets Hub Architecture
 
-### Git Workflow
-- NEVER push directly to `main` — branch protection enforced
-- ALL changes to `main` MUST go through Pull Request
-- Each feature/change gets its own branch
-- PRs do not require approving review (solo projects) but must exist
+Full specification: **[ADR-0105: Centralized Secrets Hub](../docs/adr/0105-centralized-secrets-hub.md)**
 
-### Evidence Model
-- **Currently Proven**: Works now with concrete evidence
-- **Historically Proven**: Worked in the past, evidence exists
-- **Assumed**: Plausible but no proof
-- **Unknown**: Cannot yet determine
-- **Needs Validation**: Promising but requires testing
-- **Rejected**: Unsafe, failed, obsolete, or not suitable
+Hub contains:
+- GitHub App credentials (always required)
+- Provider tokens (Railway, Cloudflare, N8N) — conditional
 
-## Architecture References
+## Current Implementation
 
-### ADR Documents
-All major decisions documented in `docs/adr/`:
-- **0100**: Migrate to GitHub App tokens (from classic PATs)
-- **0101**: Explicit secret passing (eliminate secrets:inherit)
-- **0102**: Refactor mcp__github__* dependencies
-- **0103**: WIF branch scoping (enhance credential isolation)
-- **0104**: External API token handling (HTTP Authorization header)
+- **Project created:** 2026-04-29 in Cloud Shell
+- **Billing:** Active and verified
+- **Secret Manager API:** Enabled
+- **17 secrets migrated:** From or-infra-admin-hub → or-infra-templet-admin ✓
 
-### Design Specifications
-See `docs/architecture/`:
-- **template-repo-structure.md**: Directory layout and file organization
-- **bootstrap-automation.md**: Initialization workflow and manual gates
-- **provider-integration-patterns.md**: Provider-specific setup (GCP, GitHub, Railway, Cloudflare, N8N)
-- **journey-format.md**: Session progress tracking format
+## Related Files
 
-## Before You Start
-
-1. Review all 5 ADRs in `docs/adr/`
-2. Read `docs/architecture/bootstrap-automation.md` completely
-3. Ensure GitHub App credentials and GCP setup ready
-4. Create JOURNEY.md for your session
-5. Set up provider integration following `docs/architecture/provider-integration-patterns.md`
-
-## Environment Assumptions
-- Git available and configured
-- GitHub CLI optional (use curl + token if unavailable)
-- GCP CLI optional (use Terraform/API if unavailable)
-- For cloud sessions: network isolation may apply — use offline-first approach
-
-## Output Language
-All human-facing explanations must be in clear Hebrew.
-Code, file names, commands, and technical identifiers remain in English.
+- [ADR-0105: Centralized Secrets Hub](../docs/adr/0105-centralized-secrets-hub.md) — Architecture & decision
+- [Cloud-Native Bootstrap Guide](../docs/guides/cloud-native-bootstrap.md) — Step-by-step user guide
+- [bootstrap/pre-bootstrap.sh](./bootstrap/pre-bootstrap.sh) — Implementation (Cloud Shell)
+- [bootstrap/bootstrap-new-project.sh](./bootstrap/bootstrap-new-project.sh) — Implementation (template)
 
 ---
 
-**Status**: Alpha (v0.4.0-alpha)
-**Last Updated**: 2026-04-28
-**License**: Apache 2.0
+**Last Updated:** 2026-04-29  
+**Maintained by:** Phase 9 Bootstrap
