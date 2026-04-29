@@ -1,87 +1,80 @@
-# CLAUDE.md — Autonomous AI System Template
+# Phase 9 Bootstrap - Secrets Hub Configuration
 
-## Identity
-This repository (`edri2or/autonomous-ai-system-template`) is the FINAL TEMPLATE.
-It is a production-ready framework for building autonomous agents with security-first architecture.
+**Status:** ACTIVE (2026-04-29)  
+**Project:** or-infra-templet-admin  
+**Region:** Global (GCP Secret Manager)
 
-## Hard Rules (Never Break)
+## Overview
 
-- **NEVER ask the user to set a GitHub secret manually.** All GitHub secrets are set
-  programmatically by `bootstrap/pre-bootstrap.sh` or Claude Code sessions via the GitHub API.
-- **NEVER ask the user to download a service account key.** Cloud Shell uses Application Default
-  Credentials (ADC); SA keys must not be created or stored for bootstrap operations.
-- **NEVER ask the user to navigate GitHub Settings** beyond (1) creating a GitHub App via the URL
-  shown by `pre-bootstrap.sh` and clicking "Create", and (2) clicking "Install" to approve it.
-- **NEVER store an SA key in GitHub Secrets.** WIF (Workload Identity Federation) is the only
-  allowed mechanism for GitHub Actions → GCP authentication after bootstrap completes.
-- NEVER print, commit, log, or expose token/secret/PEM values.
+Dedicated GCP project created for Autonomous AI System Template bootstrap secrets management, replacing quota-limited or-infra-admin-hub.
 
-## Core Principles
+## Secrets Hub Project Details
 
-### Documentation Enforcement
-- **CLAUDE.md**: Hot memory rules and project identity (this file)
-- **ADRs**: Architecture Decision Records (docs/adr/) — all major decisions logged with rationale
-- **JOURNEY.md**: Per-session progress tracking (project-specific)
-- **Artifacts**: Committed implementation evidence (Terraform, workflows, code)
+| Property | Value |
+|----------|-------|
+| Project ID | or-infra-templet-admin |
+| Project Number | 974960215714 |
+| Service | Google Cloud Secret Manager |
+| API Status | Enabled ✓ |
+| Billing Account | Linked ✓ |
+| Organization | Auto-detected |
 
-### Security Model
-- GitHub App tokens (never classic PATs)
-- GCP Secret Manager for credential storage
-- Explicit secret passing (never secrets:inherit)
-- Workload Identity Federation for credential-less GCP access
-- Per-secret IAM bindings (least privilege)
+## Migrated Secrets (17 total)
 
-### Git Workflow
-- NEVER push directly to `main` — branch protection enforced
-- ALL changes to `main` MUST go through Pull Request
-- Each feature/change gets its own branch
-- PRs do not require approving review (solo projects) but must exist
+### Anthropic (1)
+- `ANTHROPIC_API_KEY` ✓
 
-### Evidence Model
-- **Currently Proven**: Works now with concrete evidence
-- **Historically Proven**: Worked in the past, evidence exists
-- **Assumed**: Plausible but no proof
-- **Unknown**: Cannot yet determine
-- **Needs Validation**: Promising but requires testing
-- **Rejected**: Unsafe, failed, obsolete, or not suitable
+### Cloudflare (7)
+- `CLOUDFLARE_API_TOKEN` ✓
+- `CLOUDFLARE_ACCOUNT_ID` ✓ (verified 2026-04-29)
+- `CLOUDFLARE_DOMAIN` ✓
+- `CLOUDFLARE_EMAIL` ✓
+- `CLOUDFLARE_ZONE_ID` ✓
+- `CLOUDFLARE_ACCOUNT_ID_SECOND` ✓
+- `CLOUDFLARE_API_TOKEN_SECOND` ✓
 
-## Architecture References
+### AI Services (5)
+- `DEEPGRAM_API_KEY` ✓
+- `ELEVEN_LABS_API_KEY` ✓
+- `HUGGING_FACE_API_KEY` ✓
+- `OPENROUTER_API_KEY` ✓
+- `REPLICATE_API_KEY` ✓
 
-### ADR Documents
-All major decisions documented in `docs/adr/`:
-- **0100**: Migrate to GitHub App tokens (from classic PATs)
-- **0101**: Explicit secret passing (eliminate secrets:inherit)
-- **0102**: Refactor mcp__github__* dependencies
-- **0103**: WIF branch scoping (enhance credential isolation)
-- **0104**: External API token handling (HTTP Authorization header)
+### Linear (3)
+- `LINEAR_API_KEY` ✓
+- `LINEAR_TEAM_ID` ✓
+- `LINEAR_PROJECT_ID` ✓
 
-### Design Specifications
-See `docs/architecture/`:
-- **template-repo-structure.md**: Directory layout and file organization
-- **bootstrap-automation.md**: Initialization workflow and manual gates
-- **provider-integration-patterns.md**: Provider-specific setup (GCP, GitHub, Railway, Cloudflare, N8N)
-- **journey-format.md**: Session progress tracking format
+### Railway (2)
+- `RAILWAY_PROJECT_ID` ✓
+- `RAILWAY_PROJECT_TOKEN` ✓
 
-## Before You Start
+## Verification
 
-1. Review all 5 ADRs in `docs/adr/`
-2. Read `docs/architecture/bootstrap-automation.md` completely
-3. Ensure GitHub App credentials and GCP setup ready
-4. Create JOURNEY.md for your session
-5. Set up provider integration following `docs/architecture/provider-integration-patterns.md`
+✓ All 17 secrets successfully migrated from or-infra-admin-hub  
+✓ CLOUDFLARE_ACCOUNT_ID verified present in target project (2026-04-29)  
+✓ Secret Manager API enabled and operational  
+✓ Billing account active and linked
 
-## Environment Assumptions
-- Git available and configured
-- GitHub CLI optional (use curl + token if unavailable)
-- GCP CLI optional (use Terraform/API if unavailable)
-- For cloud sessions: network isolation may apply — use offline-first approach
+## Bootstrap Configuration
 
-## Output Language
-All human-facing explanations must be in clear Hebrew.
-Code, file names, commands, and technical identifiers remain in English.
+Default secrets hub for `bootstrap/pre-bootstrap.sh`:
+```bash
+SECRETS_HUB_PROJECT="or-infra-templet-admin"
+```
+
+Users can override with:
+```bash
+./bootstrap/pre-bootstrap.sh --secrets-hub-project <custom-project-id>
+```
+
+## Related Documentation
+
+- Decision Document: [secrets-hub-project-migration.md](../docs/decisions/secrets-hub-project-migration.md)
+- Bootstrap Guide: [cloud-native-bootstrap.md](../docs/guides/cloud-native-bootstrap.md)
+- GitHub Discussion: https://github.com/edri2or/claude-builder-pro/discussions/1
 
 ---
 
-**Status**: Alpha (v0.4.0-alpha)
-**Last Updated**: 2026-04-28
-**License**: Apache 2.0
+**Last Updated:** 2026-04-29  
+**Maintained By:** Phase 9 Bootstrap Implementation
