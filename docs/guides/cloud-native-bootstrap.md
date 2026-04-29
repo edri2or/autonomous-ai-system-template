@@ -17,7 +17,7 @@ terminal and requires **zero manual secret configuration**.
 | 1 | Open [GCP Cloud Shell](https://shell.cloud.google.com) |
 | 2 | Clone this repo and run `pre-bootstrap.sh` (one command) |
 | 3 | Open the GitHub URL shown and click "Create GitHub App" |
-| 4 | Paste back the redirect URL |
+| 4 | Click "Install App" on GitHub (one additional click after app is created) |
 | 5 | Confirm Terraform apply |
 
 Everything else — App credentials, WIF provisioning, GitHub secrets, workflow trigger — is automated.
@@ -56,13 +56,24 @@ Optional flags:
 
 The script prints a URL. Open it in your browser and click **"Create GitHub App"**.
 
-GitHub redirects you to a URL containing `?code=XXXXXXXXXX`. Copy the full URL from your
-browser's address bar and paste it back into the Cloud Shell prompt.
+The script has started an HTTP server on port 8080 in Cloud Shell using the Cloud Shell web
+preview URL (`https://8080-${WEB_HOST}/callback`). When GitHub redirects back after you click
+"Create", the script's HTTP server catches the callback code automatically — **you do not need
+to copy or paste any URL**.
 
-The script stores the App ID and private key in **GCP Secret Manager** automatically and shreds
-the local copy. You will never handle the `.pem` file directly.
+The script converts the code into App credentials, stores the App ID and private key in
+**GCP Secret Manager** automatically, and shreds the local copy. You will never handle
+the `.pem` file directly.
 
-### Step 4 — Confirm Terraform apply
+### Step 4 — Install App (one click)
+
+After GitHub creates the app, it shows an **"Install App"** button on the same page.
+Click it and confirm the installation for your organization. This grants the app access
+to your repositories.
+
+Return to Cloud Shell — the script continues automatically.
+
+### Step 5 — Confirm Terraform apply
 
 Review the plan output and type `y` to apply. Terraform creates:
 - GCP Workload Identity Pool + Provider (keyless GitHub → GCP auth)
@@ -72,7 +83,7 @@ Review the plan output and type `y` to apply. Terraform creates:
 After apply, the script sets `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT_EMAIL`
 as GitHub secrets in the new repo — via the GitHub API, not manually.
 
-### Step 5 — Done
+### Step 6 — Done
 
 The script triggers `autonomous-control-plane.yml` in the new repo and prints the Actions URL.
 Monitor the workflow run to confirm all ADR checks pass and `docs/adr/0200-project-charter.md`
@@ -99,8 +110,9 @@ This workflow uses WIF for GCP auth (no SA key). It also requires `GH_PAT` as a 
 | `WIF token exchange failed` | Attribute condition wrong | Check `assertion.ref == 'refs/heads/main'` in `terraform/wif.tf` |
 | `terraform: command not found` | Not installed | Script installs Terraform automatically |
 | `GH_TOKEN: not set` | PAT missing | `export GH_TOKEN="YOUR_PAT"` |
-| `No code= found in URL` | Wrong URL pasted | Ensure you paste the full redirect URL including `?code=...` |
-| `ERROR: Failed to get App ID` | Manifest code expired | Re-run; codes expire after ~10 minutes |
+| `ERROR: WEB_HOST not set` | Not running in Cloud Shell | Script must run from [shell.cloud.google.com](https://shell.cloud.google.com) |
+| `No code received from GitHub (timeout)` | App not created in time | Re-run; click "Create GitHub App" within the 120-second window shown |
+| `ERROR: Failed to get App ID` | Manifest code expired | Re-run; codes expire after 1 hour — complete the flow promptly |
 
 ---
 
