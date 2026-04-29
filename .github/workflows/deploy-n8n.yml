@@ -40,7 +40,7 @@ permissions:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.project_domain != '' && inputs.n8n_admin_email != ''
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       N8N_DOMAIN: "${{ inputs.n8n_subdomain }}.${{ inputs.project_domain }}"
@@ -57,7 +57,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      # ── Phase 1: Fetch all required secrets from GCP Secret Manager ──────────
+      # ── Phase 1: Fetch all required secrets from GCP Secret Manager ────────────
       - name: Fetch secrets from GCP SM
         id: sm
         env:
@@ -89,7 +89,7 @@ jobs:
           CF_ZONE_ID=$(get_secret "cloudflare-zone-id")
           echo "cf_zone_id=$CF_ZONE_ID" >> "$GITHUB_OUTPUT"
 
-      # ── Phase 2: Create Railway project + deploy N8N + Postgres ─────────────
+      # ── Phase 2: Create Railway project + deploy N8N + Postgres ─────────────────
       - name: Create Railway project and deploy services
         id: railway
         env:
@@ -107,7 +107,7 @@ jobs:
           }
 
           echo "Creating Railway project: $PROJECT_NAME..."
-          PROJECT_RESPONSE=$(gql "{\"query\": \"mutation { projectCreate(input: {name: \\\"$PROJECT_NAME\\\"}) { id defaultEnvironment { id } } }\"}")
+          PROJECT_RESPONSE=$(gql "{\"query\": \"mutation { projectCreate(input: {name: \\\"$PROJECT_NAME\\\"}) { id defaultEnvironment { id } } }\"")
           PROJECT_ID=$(echo "$PROJECT_RESPONSE" | jq -r '.data.projectCreate.id')
           ENVIRONMENT_ID=$(echo "$PROJECT_RESPONSE" | jq -r '.data.projectCreate.defaultEnvironment.id')
 
@@ -129,13 +129,13 @@ jobs:
 
           # Deploy Postgres service
           echo "Deploying Postgres..."
-          PG_RESPONSE=$(gql "{\"query\": \"mutation { serviceCreate(input: {name: \\\"postgres\\\", projectId: \\\"$PROJECT_ID\\\", source: {image: \\\"postgres:15\\\"}}) { id } }\"}")
+          PG_RESPONSE=$(gql "{\"query\": \"mutation { serviceCreate(input: {name: \\\"postgres\\\", projectId: \\\"$PROJECT_ID\\\", source: {image: \\\"postgres:15\\\"}}) { id } }\"")
           PG_SERVICE_ID=$(echo "$PG_RESPONSE" | jq -r '.data.serviceCreate.id')
           echo "  ✅ Postgres service: $PG_SERVICE_ID"
 
           # Deploy N8N service
           echo "Deploying N8N..."
-          N8N_RESPONSE=$(gql "{\"query\": \"mutation { serviceCreate(input: {name: \\\"n8n\\\", projectId: \\\"$PROJECT_ID\\\", source: {image: \\\"n8nio/n8n:latest\\\"}}) { id } }\"}")
+          N8N_RESPONSE=$(gql "{\"query\": \"mutation { serviceCreate(input: {name: \\\"n8n\\\", projectId: \\\"$PROJECT_ID\\\", source: {image: \\\"n8nio/n8n:latest\\\"}}) { id } }\"")
           N8N_SERVICE_ID=$(echo "$N8N_RESPONSE" | jq -r '.data.serviceCreate.id')
           echo "  ✅ N8N service: $N8N_SERVICE_ID"
 
@@ -174,7 +174,7 @@ jobs:
           set_var "N8N_ENCRYPTION_KEY"    "$N8N_ENCRYPTION_KEY"
           echo "  ✅ N8N env vars configured (encryption key masked in logs)"
 
-      # ── Phase 4: Register custom domain in Railway ───────────────────────────
+      # ── Phase 4: Register custom domain in Railway ──────────────────────────
       - name: Register N8N custom domain in Railway
         id: domain
         env:
@@ -188,7 +188,7 @@ jobs:
           DOMAIN_RESPONSE=$(curl -sf -X POST "$GRAPHQL_URL" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"mutation { customDomainCreate(input: {domain: \\\"${{ env.N8N_DOMAIN }}\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\"}) { id cnameCheck { link } } }\"}")
+            -d "{\"query\": \"mutation { customDomainCreate(input: {domain: \\\"${{ env.N8N_DOMAIN }}\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\"}) { id cnameCheck { link } } }\"}") 
 
           CNAME_TARGET=$(echo "$DOMAIN_RESPONSE" | jq -r '.data.customDomainCreate.cnameCheck.link // empty')
 
@@ -206,7 +206,7 @@ jobs:
           echo "  ✅ Custom domain registered. CNAME target: $CNAME_TARGET"
           echo "cname_target=$CNAME_TARGET" >> "$GITHUB_OUTPUT"
 
-      # ── Phase 5: Create Cloudflare CNAME (DNS-only, not proxied) ────────────
+      # ── Phase 5: Create Cloudflare CNAME (DNS-only, not proxied) ───────────────
       #
       # IMPORTANT: proxied must be false.
       # Railway issues its own Let's Encrypt certificate and needs a direct TLS
@@ -308,7 +308,7 @@ jobs:
         if: always()
         run: |
           echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "╬══════════════════════════════════════════════════════════╣"
           echo "║  N8N Deployment Complete                                 ║"
           echo "╠══════════════════════════════════════════════════════════╣"
           printf  "║  N8N URL:  https://%-38s ║\n" "${{ env.N8N_DOMAIN }}"
@@ -319,4 +319,4 @@ jobs:
           echo "║    1. Login to N8N and verify owner account              ║"
           echo "║    2. Import workflows from workflows/n8n/ (if any)      ║"
           echo "║    3. Configure Telegram bot token in N8N                ║"
-          echo "╚══════════════════════════════════════════════════════════╝"
+          echo "≕══════════════════════════════════════════════════════════╡"
