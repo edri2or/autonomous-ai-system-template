@@ -19,18 +19,19 @@
 #   bash bootstrap/pre-bootstrap.sh --new-repo MY_PROJECT_NAME
 #
 # Optional overrides (auto-detected if omitted):
-#   --gcp-project  GCP_PROJECT_ID  (default: current gcloud project)
-#   --org          GITHUB_ORG      (default: owner of this template repo)
-#   --enable-railway    true|false
-#   --enable-cloudflare true|false
-#   --enable-n8n        true|false
-#   --railway-token     RAILWAY_API_TOKEN  (required if --enable-railway true)
-#   --cf-token          CF_API_TOKEN       (required if --enable-cloudflare true)
-#   --cf-zone-id        CF_ZONE_ID         (required if --enable-cloudflare true)
-#   --project-domain    my.domain.com      (required if --enable-n8n true, e.g. myproject.or-infra.com)
-#   --n8n-subdomain     n8n                (default: n8n)
-#   --n8n-admin-email   admin@my.domain    (required if --enable-n8n true)
-#   --yes                                  (skip Terraform confirm)
+#   --gcp-project         GCP_PROJECT_ID        (default: current gcloud project)
+#   --org                 GITHUB_ORG            (default: owner of this template repo)
+#   --secrets-hub-project HUB_PROJECT_ID        (default: or-infra-admin-hub)
+#   --enable-railway      true|false
+#   --enable-cloudflare   true|false
+#   --enable-n8n          true|false
+#   --railway-token       RAILWAY_API_TOKEN     (required if --enable-railway true)
+#   --cf-token            CF_API_TOKEN          (required if --enable-cloudflare true)
+#   --cf-zone-id          CF_ZONE_ID            (required if --enable-cloudflare true)
+#   --project-domain      my.domain.com         (required if --enable-n8n true, e.g. myproject.or-infra.com)
+#   --n8n-subdomain       n8n                   (default: n8n)
+#   --n8n-admin-email     admin@my.domain       (required if --enable-n8n true)
+#   --yes                                       (skip Terraform confirm)
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,22 +42,24 @@ ENABLE_RAILWAY="false"; ENABLE_CLOUDFLARE="false"; ENABLE_N8N="false"
 RAILWAY_TOKEN=""; CF_TOKEN=""; CF_ZONE_ID=""
 PROJECT_DOMAIN=""; N8N_SUBDOMAIN="n8n"; N8N_ADMIN_EMAIL=""
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
+SECRETS_HUB_PROJECT="or-infra-admin-hub"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --org)               ORG="$2";               shift 2 ;;
-    --gcp-project)       GCP_PROJECT="$2";        shift 2 ;;
-    --new-repo)          NEW_REPO="$2";           shift 2 ;;
-    --enable-railway)    ENABLE_RAILWAY="$2";     shift 2 ;;
-    --enable-cloudflare) ENABLE_CLOUDFLARE="$2";  shift 2 ;;
-    --enable-n8n)        ENABLE_N8N="$2";         shift 2 ;;
-    --railway-token)     RAILWAY_TOKEN="$2";      shift 2 ;;
-    --cf-token)          CF_TOKEN="$2";           shift 2 ;;
-    --cf-zone-id)        CF_ZONE_ID="$2";         shift 2 ;;
-    --project-domain)    PROJECT_DOMAIN="$2";     shift 2 ;;
-    --n8n-subdomain)     N8N_SUBDOMAIN="$2";      shift 2 ;;
-    --n8n-admin-email)   N8N_ADMIN_EMAIL="$2";    shift 2 ;;
-    --yes|-y)            AUTO_APPROVE="true";     shift   ;;
+    --org)                ORG="$2";               shift 2 ;;
+    --gcp-project)        GCP_PROJECT="$2";      shift 2 ;;
+    --secrets-hub-project) SECRETS_HUB_PROJECT="$2"; shift 2 ;;
+    --new-repo)           NEW_REPO="$2";         shift 2 ;;
+    --enable-railway)     ENABLE_RAILWAY="$2";   shift 2 ;;
+    --enable-cloudflare)  ENABLE_CLOUDFLARE="$2"; shift 2 ;;
+    --enable-n8n)         ENABLE_N8N="$2";       shift 2 ;;
+    --railway-token)      RAILWAY_TOKEN="$2";    shift 2 ;;
+    --cf-token)           CF_TOKEN="$2";         shift 2 ;;
+    --cf-zone-id)         CF_ZONE_ID="$2";       shift 2 ;;
+    --project-domain)     PROJECT_DOMAIN="$2";   shift 2 ;;
+    --n8n-subdomain)      N8N_SUBDOMAIN="$2";    shift 2 ;;
+    --n8n-admin-email)    N8N_ADMIN_EMAIL="$2";  shift 2 ;;
+    --yes|-y)             AUTO_APPROVE="true";   shift   ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -193,11 +196,12 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 echo "── PHASE 1: GitHub App ──────────────────────────────────────"
 
-if gcloud secrets describe "$SM_APP_ID"  --project="$GCP_PROJECT" &>/dev/null \
-&& gcloud secrets describe "$SM_APP_KEY" --project="$GCP_PROJECT" &>/dev/null; then
-  echo "✅ GitHub App credentials already in GCP Secret Manager — skipping"
+# Check both secrets exist with single gcloud call
+if gcloud secrets describe "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" &>/dev/null && \
+   gcloud secrets describe "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" &>/dev/null; then
+  echo "✅ GitHub App credentials found in secrets hub ($SECRETS_HUB_PROJECT)"
   APP_ID=$(gcloud secrets versions access latest \
-    --secret="$SM_APP_ID" --project="$GCP_PROJECT")
+    --secret="$SM_APP_ID" --project="$SECRETS_HUB_PROJECT")
 else
   # Compact JSON manifest (short URL to avoid query-string limits)
   MANIFEST_ENC=$(ORG="$ORG" python3 - <<'PYEOF'
@@ -268,21 +272,23 @@ PYEOF
   [[ ! -s "$PEM_TMPFILE" ]] && { echo "ERROR: Failed to get private key"; exit 1; }
 
   echo "  ✅ App created (ID: $APP_ID)"
-  echo "  Storing in GCP Secret Manager..."
+  echo "  Storing in secrets hub ($SECRETS_HUB_PROJECT)..."
 
+  # Store app ID (create if missing, add version if exists)
   printf '%s' "$APP_ID" | \
-    gcloud secrets create "$SM_APP_ID" --project="$GCP_PROJECT" \
-      --replication-policy=automatic --data-file=- 2>/dev/null \
-    || printf '%s' "$APP_ID" | \
-       gcloud secrets versions add "$SM_APP_ID" --project="$GCP_PROJECT" --data-file=-
+    gcloud secrets versions add "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" --data-file=- 2>/dev/null || \
+    printf '%s' "$APP_ID" | \
+      gcloud secrets create "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" \
+        --replication-policy=automatic --data-file=-
 
-  gcloud secrets create "$SM_APP_KEY" --project="$GCP_PROJECT" \
-    --replication-policy=automatic --data-file="$PEM_TMPFILE" 2>/dev/null \
-    || gcloud secrets versions add "$SM_APP_KEY" --project="$GCP_PROJECT" \
-       --data-file="$PEM_TMPFILE"
+  # Store app key (add version if exists, create if missing)
+  gcloud secrets versions add "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" \
+    --data-file="$PEM_TMPFILE" 2>/dev/null || \
+    gcloud secrets create "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" \
+      --replication-policy=automatic --data-file="$PEM_TMPFILE"
 
   shred -uz "$PEM_TMPFILE" 2>/dev/null; touch "$PEM_TMPFILE"
-  echo "  ✅ Credentials stored in GCP Secret Manager"
+  echo "  ✅ Credentials stored in secrets hub"
   echo "  ✅ Local .pem shredded"
 fi
 
@@ -328,15 +334,16 @@ if ! command -v terraform &>/dev/null; then
 fi
 
 cat > terraform.tfvars <<TFVARS
-gcp_project_id     = "$GCP_PROJECT"
-github_org         = "$ORG"
-repo_name          = "$NEW_REPO"
-enable_railway     = $ENABLE_RAILWAY
-enable_cloudflare  = $ENABLE_CLOUDFLARE
-enable_n8n         = $ENABLE_N8N
-project_domain     = "$PROJECT_DOMAIN"
-n8n_subdomain      = "$N8N_SUBDOMAIN"
-n8n_admin_email    = "$N8N_ADMIN_EMAIL"
+gcp_project_id          = "$GCP_PROJECT"
+secrets_hub_project_id  = "$SECRETS_HUB_PROJECT"
+github_org              = "$ORG"
+repo_name               = "$NEW_REPO"
+enable_railway          = $ENABLE_RAILWAY
+enable_cloudflare       = $ENABLE_CLOUDFLARE
+enable_n8n              = $ENABLE_N8N
+project_domain          = "$PROJECT_DOMAIN"
+n8n_subdomain           = "$N8N_SUBDOMAIN"
+n8n_admin_email         = "$N8N_ADMIN_EMAIL"
 TFVARS
 
 # Cloud Shell provides Application Default Credentials — no SA key needed
@@ -374,9 +381,10 @@ echo "  Setting WIF credentials in $ORG/$NEW_REPO..."
 set_github_secret "$ORG/$NEW_REPO" "GCP_WORKLOAD_IDENTITY_PROVIDER" "$WIF_PROVIDER"
 set_github_secret "$ORG/$NEW_REPO" "GCP_SERVICE_ACCOUNT_EMAIL"      "$WIF_SA_EMAIL"
 set_github_secret "$ORG/$NEW_REPO" "GCP_PROJECT_ID"                 "$GCP_PROJECT"
+set_github_secret "$ORG/$NEW_REPO" "GCP_SECRETS_HUB_PROJECT"         "$SECRETS_HUB_PROJECT"
 set_github_secret "$ORG/$NEW_REPO" "GH_APP_ID"                      "$APP_ID"
 
-echo "  ✅ GitHub secrets configured (WIF only — no SA key stored)"
+echo "  ✅ GitHub secrets configured (WIF + centralized secrets hub)"
 
 # ══════════════════════════════════════════════════════════════
 #  PHASE 4.5 — Store Railway / Cloudflare credentials in GCP SM
@@ -389,11 +397,11 @@ if [[ "$ENABLE_RAILWAY" == "true" ]] && [[ -n "$RAILWAY_TOKEN" ]]; then
   store_sm_secret() {
     local name="$1" value="$2"
     printf '%s' "$value" | \
-      gcloud secrets versions add "$name" --project="$GCP_PROJECT" --data-file=- 2>/dev/null || \
+      gcloud secrets versions add "$name" --project="$SECRETS_HUB_PROJECT" --data-file=- 2>/dev/null || \
     printf '%s' "$value" | \
-      gcloud secrets create "$name" --project="$GCP_PROJECT" \
+      gcloud secrets create "$name" --project="$SECRETS_HUB_PROJECT" \
         --replication-policy=automatic --data-file=-
-    echo "  ✅ $name stored in GCP SM"
+    echo "  ✅ $name stored in secrets hub"
   }
 
   echo "  Storing Railway API token..."

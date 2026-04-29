@@ -25,16 +25,18 @@ ENABLE_RAILWAY="false"
 ENABLE_CLOUDFLARE="false"
 ENABLE_N8N="false"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
+SECRETS_HUB_PROJECT="or-infra-admin-hub"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --org)              ORG="$2";              shift 2 ;;
-    --gcp-project)      GCP_PROJECT="$2";      shift 2 ;;
-    --new-repo)         NEW_REPO="$2";         shift 2 ;;
-    --enable-railway)   ENABLE_RAILWAY="$2";   shift 2 ;;
-    --enable-cloudflare) ENABLE_CLOUDFLARE="$2"; shift 2 ;;
-    --enable-n8n)       ENABLE_N8N="$2";       shift 2 ;;
-    --yes|-y)           AUTO_APPROVE="true";   shift ;;
+    --org)                ORG="$2";              shift 2 ;;
+    --gcp-project)        GCP_PROJECT="$2";     shift 2 ;;
+    --secrets-hub-project) SECRETS_HUB_PROJECT="$2"; shift 2 ;;
+    --new-repo)           NEW_REPO="$2";        shift 2 ;;
+    --enable-railway)     ENABLE_RAILWAY="$2";  shift 2 ;;
+    --enable-cloudflare)  ENABLE_CLOUDFLARE="$2"; shift 2 ;;
+    --enable-n8n)         ENABLE_N8N="$2";      shift 2 ;;
+    --yes|-y)             AUTO_APPROVE="true";  shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -58,55 +60,8 @@ WORK_DIR="/tmp/bootstrap-$$"
 # Clean up working directory on exit
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# GitHub API helper — reuses auth headers (ADR-0104 pattern)
-gh_api() {
-  curl -s \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer $GH_TOKEN" \
-    "$@"
-}
-
-# Set a GitHub Actions secret using libsodium-encrypted PUT (GitHub API requirement).
-# Tries gh CLI first, falls back to Python + PyNaCl.
-set_github_secret() {
-  local REPO="$1" NAME="$2" VALUE="$3"
-
-  if command -v gh &>/dev/null; then
-    echo -n "$VALUE" | gh secret set "$NAME" --repo "$REPO"
-    return 0
-  fi
-
-  local KEY_JSON KEY_ID PUB_KEY ENCRYPTED
-  KEY_JSON=$(gh_api "https://api.github.com/repos/$REPO/actions/secrets/public-key")
-  KEY_ID=$(echo "$KEY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['key_id'])")
-  PUB_KEY=$(echo "$KEY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])")
-
-  ENCRYPTED=$(python3 - "$VALUE" "$PUB_KEY" <<'PYEOF'
-import sys, base64
-value, pub_key = sys.argv[1], sys.argv[2]
-try:
-    from nacl.public import PublicKey, SealedBox
-    box = SealedBox(PublicKey(base64.b64decode(pub_key)))
-    print(base64.b64encode(box.encrypt(value.encode())).decode())
-except ImportError:
-    print("PyNaCl not installed", file=sys.stderr)
-    sys.exit(2)
-PYEOF
-  ) || {
-    echo "ERROR: cannot set secrets automatically — install gh CLI or PyNaCl:"
-    echo "  brew install gh   (then: gh auth login)"
-    echo "  pip install PyNaCl"
-    exit 1
-  }
-
-  HTTP_CODE=$(gh_api -s -o /dev/null -w "%{http_code}" -X PUT \
-    "https://api.github.com/repos/$REPO/actions/secrets/$NAME" \
-    -d "{\"encrypted_value\":\"$ENCRYPTED\",\"key_id\":\"$KEY_ID\"}")
-  if [[ "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
-    echo "ERROR: Failed to set secret $NAME (HTTP $HTTP_CODE)"
-    exit 1
-  fi
-}
+# Source shared bootstrap utilities
+source "$SCRIPT_DIR/lib-common.sh"
 
 # --------------------------------------------------------------------------
 # Phase 1: Verify prerequisites
@@ -159,19 +114,20 @@ echo "=== Phase 4: Configure Terraform ==="
 
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 
-# Combine first 5 substitutions into a single sed pass
+# Populate terraform.tfvars from variables (single pass, anchored patterns)
 sed -i \
-  -e "s|github_org.*=.*|github_org = \"$ORG\"|g" \
-  -e "s|gcp_project_id.*=.*|gcp_project_id = \"$GCP_PROJECT\"|g" \
-  -e "s|enable_railway.*=.*|enable_railway = $ENABLE_RAILWAY|g" \
-  -e "s|enable_cloudflare.*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|g" \
-  -e "s|enable_n8n.*=.*|enable_n8n = $ENABLE_N8N|g" \
+  -e "s|^github_org\s*=.*|github_org = \"$ORG\"|" \
+  -e "s|^gcp_project_id\s*=.*|gcp_project_id = \"$GCP_PROJECT\"|" \
+  -e "s|^secrets_hub_project_id\s*=.*|secrets_hub_project_id = \"$SECRETS_HUB_PROJECT\"|" \
+  -e "s|^enable_railway\s*=.*|enable_railway = $ENABLE_RAILWAY|" \
+  -e "s|^enable_cloudflare\s*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|" \
+  -e "s|^enable_n8n\s*=.*|enable_n8n = $ENABLE_N8N|" \
   terraform/terraform.tfvars
 
-# Read GitHub App ID from GCP Secret Manager (must come after gcloud is auth'd)
+# Read GitHub App ID from secrets hub (must come after gcloud is auth'd)
 APP_ID=$(gcloud secrets versions access latest \
   --secret="github-app-id" \
-  --project="$GCP_PROJECT")
+  --project="$SECRETS_HUB_PROJECT")
 sed -i "s|github_app_id.*=.*|github_app_id = \"$APP_ID\"|g" terraform/terraform.tfvars
 
 echo "✓ terraform.tfvars populated"
@@ -216,12 +172,12 @@ if [[ "$REPLY" =~ ^[Yy][Ee][Ss]$ ]]; then
   echo "=== Phase 7: Create GitHub Secrets ==="
   cd ..
 
-  for SECRET_NAME in "GCP_WORKLOAD_IDENTITY_PROVIDER:$WIF_PROVIDER" "GCP_SERVICE_ACCOUNT_EMAIL:$SA_EMAIL" "GH_APP_ID:$APP_ID"; do
-    NAME="${SECRET_NAME%%:*}"
-    VALUE="${SECRET_NAME##*:}"
-    set_github_secret "$ORG/$NEW_REPO" "$NAME" "$VALUE"
-    echo "  ✓ Secret $NAME set"
-  done
+  # Set GitHub secrets (key-value pairs)
+  set_github_secret "$ORG/$NEW_REPO" "GCP_WORKLOAD_IDENTITY_PROVIDER" "$WIF_PROVIDER"
+  set_github_secret "$ORG/$NEW_REPO" "GCP_SERVICE_ACCOUNT_EMAIL"      "$SA_EMAIL"
+  set_github_secret "$ORG/$NEW_REPO" "GCP_SECRETS_HUB_PROJECT"         "$SECRETS_HUB_PROJECT"
+  set_github_secret "$ORG/$NEW_REPO" "GH_APP_ID"                      "$APP_ID"
+  echo "  ✓ Secrets set (WIF, hub project, app ID)"
 
   # --------------------------------------------------------------------------
   # Phase 8: Commit bootstrap state

@@ -3,6 +3,12 @@ variable "gcp_project_id" {
   type        = string
 }
 
+variable "secrets_hub_project_id" {
+  description = "GCP project ID containing centralized secrets (GitHub App credentials, provider tokens)"
+  type        = string
+  default     = "or-infra-admin-hub"
+}
+
 variable "github_org" {
   description = "GitHub organization or user that owns the repository"
   type        = string
