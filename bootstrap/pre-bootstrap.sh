@@ -378,9 +378,10 @@ echo "  Setting WIF credentials in $ORG/$NEW_REPO..."
 set_github_secret "$ORG/$NEW_REPO" "GCP_WORKLOAD_IDENTITY_PROVIDER" "$WIF_PROVIDER"
 set_github_secret "$ORG/$NEW_REPO" "GCP_SERVICE_ACCOUNT_EMAIL"      "$WIF_SA_EMAIL"
 set_github_secret "$ORG/$NEW_REPO" "GCP_PROJECT_ID"                 "$GCP_PROJECT"
+set_github_secret "$ORG/$NEW_REPO" "GCP_SECRETS_HUB_PROJECT"         "$SECRETS_HUB_PROJECT"
 set_github_secret "$ORG/$NEW_REPO" "GH_APP_ID"                      "$APP_ID"
 
-echo "  ✅ GitHub secrets configured (WIF only — no SA key stored)"
+echo "  ✅ GitHub secrets configured (WIF + centralized secrets hub)"
 
 # ══════════════════════════════════════════════════════════════
 #  PHASE 4.5 — Store Railway / Cloudflare credentials in GCP SM

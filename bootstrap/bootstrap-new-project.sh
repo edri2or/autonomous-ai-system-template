@@ -25,16 +25,18 @@ ENABLE_RAILWAY="false"
 ENABLE_CLOUDFLARE="false"
 ENABLE_N8N="false"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
+SECRETS_HUB_PROJECT="or-infra-admin-hub"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --org)              ORG="$2";              shift 2 ;;
-    --gcp-project)      GCP_PROJECT="$2";      shift 2 ;;
-    --new-repo)         NEW_REPO="$2";         shift 2 ;;
-    --enable-railway)   ENABLE_RAILWAY="$2";   shift 2 ;;
-    --enable-cloudflare) ENABLE_CLOUDFLARE="$2"; shift 2 ;;
-    --enable-n8n)       ENABLE_N8N="$2";       shift 2 ;;
-    --yes|-y)           AUTO_APPROVE="true";   shift ;;
+    --org)                ORG="$2";              shift 2 ;;
+    --gcp-project)        GCP_PROJECT="$2";     shift 2 ;;
+    --secrets-hub-project) SECRETS_HUB_PROJECT="$2"; shift 2 ;;
+    --new-repo)           NEW_REPO="$2";        shift 2 ;;
+    --enable-railway)     ENABLE_RAILWAY="$2";  shift 2 ;;
+    --enable-cloudflare)  ENABLE_CLOUDFLARE="$2"; shift 2 ;;
+    --enable-n8n)         ENABLE_N8N="$2";      shift 2 ;;
+    --yes|-y)             AUTO_APPROVE="true";  shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -159,19 +161,20 @@ echo "=== Phase 4: Configure Terraform ==="
 
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 
-# Combine first 5 substitutions into a single sed pass
+# Combine sed substitutions into a single pass
 sed -i \
   -e "s|github_org.*=.*|github_org = \"$ORG\"|g" \
   -e "s|gcp_project_id.*=.*|gcp_project_id = \"$GCP_PROJECT\"|g" \
+  -e "s|secrets_hub_project_id.*=.*|secrets_hub_project_id = \"$SECRETS_HUB_PROJECT\"|g" \
   -e "s|enable_railway.*=.*|enable_railway = $ENABLE_RAILWAY|g" \
   -e "s|enable_cloudflare.*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|g" \
   -e "s|enable_n8n.*=.*|enable_n8n = $ENABLE_N8N|g" \
   terraform/terraform.tfvars
 
-# Read GitHub App ID from GCP Secret Manager (must come after gcloud is auth'd)
+# Read GitHub App ID from secrets hub (must come after gcloud is auth'd)
 APP_ID=$(gcloud secrets versions access latest \
   --secret="github-app-id" \
-  --project="$GCP_PROJECT")
+  --project="$SECRETS_HUB_PROJECT")
 sed -i "s|github_app_id.*=.*|github_app_id = \"$APP_ID\"|g" terraform/terraform.tfvars
 
 echo "✓ terraform.tfvars populated"
@@ -216,7 +219,7 @@ if [[ "$REPLY" =~ ^[Yy][Ee][Ss]$ ]]; then
   echo "=== Phase 7: Create GitHub Secrets ==="
   cd ..
 
-  for SECRET_NAME in "GCP_WORKLOAD_IDENTITY_PROVIDER:$WIF_PROVIDER" "GCP_SERVICE_ACCOUNT_EMAIL:$SA_EMAIL" "GH_APP_ID:$APP_ID"; do
+  for SECRET_NAME in "GCP_WORKLOAD_IDENTITY_PROVIDER:$WIF_PROVIDER" "GCP_SERVICE_ACCOUNT_EMAIL:$SA_EMAIL" "GCP_SECRETS_HUB_PROJECT:$SECRETS_HUB_PROJECT" "GH_APP_ID:$APP_ID"; do
     NAME="${SECRET_NAME%%:*}"
     VALUE="${SECRET_NAME##*:}"
     set_github_secret "$ORG/$NEW_REPO" "$NAME" "$VALUE"
