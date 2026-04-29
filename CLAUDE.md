@@ -1,80 +1,44 @@
-# Phase 9 Bootstrap - Secrets Hub Configuration
+# Phase 9 Bootstrap — Operational Memory
 
 **Status:** ACTIVE (2026-04-29)  
-**Project:** or-infra-templet-admin  
-**Region:** Global (GCP Secret Manager)
+**Secrets Hub Project:** or-infra-templet-admin
 
-## Overview
+## Quick Reference
 
-Dedicated GCP project created for Autonomous AI System Template bootstrap secrets management, replacing quota-limited or-infra-admin-hub.
+**Default secrets hub:** `or-infra-templet-admin` (project ID: 974960215714)
 
-## Secrets Hub Project Details
+**Bootstrap scripts use this as default:**
+- `bootstrap/pre-bootstrap.sh` — Cloud Shell one-command bootstrap
+- `bootstrap/bootstrap-new-project.sh` — Post-gate new project creation
 
-| Property | Value |
-|----------|-------|
-| Project ID | or-infra-templet-admin |
-| Project Number | 974960215714 |
-| Service | Google Cloud Secret Manager |
-| API Status | Enabled ✓ |
-| Billing Account | Linked ✓ |
-| Organization | Auto-detected |
-
-## Migrated Secrets (17 total)
-
-### Anthropic (1)
-- `ANTHROPIC_API_KEY` ✓
-
-### Cloudflare (7)
-- `CLOUDFLARE_API_TOKEN` ✓
-- `CLOUDFLARE_ACCOUNT_ID` ✓ (verified 2026-04-29)
-- `CLOUDFLARE_DOMAIN` ✓
-- `CLOUDFLARE_EMAIL` ✓
-- `CLOUDFLARE_ZONE_ID` ✓
-- `CLOUDFLARE_ACCOUNT_ID_SECOND` ✓
-- `CLOUDFLARE_API_TOKEN_SECOND` ✓
-
-### AI Services (5)
-- `DEEPGRAM_API_KEY` ✓
-- `ELEVEN_LABS_API_KEY` ✓
-- `HUGGING_FACE_API_KEY` ✓
-- `OPENROUTER_API_KEY` ✓
-- `REPLICATE_API_KEY` ✓
-
-### Linear (3)
-- `LINEAR_API_KEY` ✓
-- `LINEAR_TEAM_ID` ✓
-- `LINEAR_PROJECT_ID` ✓
-
-### Railway (2)
-- `RAILWAY_PROJECT_ID` ✓
-- `RAILWAY_PROJECT_TOKEN` ✓
-
-## Verification
-
-✓ All 17 secrets successfully migrated from or-infra-admin-hub  
-✓ CLOUDFLARE_ACCOUNT_ID verified present in target project (2026-04-29)  
-✓ Secret Manager API enabled and operational  
-✓ Billing account active and linked
-
-## Bootstrap Configuration
-
-Default secrets hub for `bootstrap/pre-bootstrap.sh`:
-```bash
-SECRETS_HUB_PROJECT="or-infra-templet-admin"
-```
-
-Users can override with:
+**Override if needed:**
 ```bash
 ./bootstrap/pre-bootstrap.sh --secrets-hub-project <custom-project-id>
 ```
 
-## Related Documentation
+## Secrets Hub Architecture
 
-- Decision Document: [secrets-hub-project-migration.md](../docs/decisions/secrets-hub-project-migration.md)
-- Bootstrap Guide: [cloud-native-bootstrap.md](../docs/guides/cloud-native-bootstrap.md)
-- GitHub Discussion: https://github.com/edri2or/claude-builder-pro/discussions/1
+Full specification: **[ADR-0105: Centralized Secrets Hub](../docs/adr/0105-centralized-secrets-hub.md)**
+
+Hub contains:
+- GitHub App credentials (always required)
+- Provider tokens (Railway, Cloudflare, N8N) — conditional
+
+## Current Implementation
+
+- **Project created:** 2026-04-29 in Cloud Shell
+- **Billing:** Active and verified
+- **Secret Manager API:** Enabled
+- **17 secrets migrated:** From or-infra-admin-hub → or-infra-templet-admin ✓
+
+## Related Files
+
+- [ADR-0105: Centralized Secrets Hub](../docs/adr/0105-centralized-secrets-hub.md) — Architecture & decision
+- [Cloud-Native Bootstrap Guide](../docs/guides/cloud-native-bootstrap.md) — Step-by-step user guide
+- [bootstrap/pre-bootstrap.sh](./bootstrap/pre-bootstrap.sh) — Implementation (Cloud Shell)
+- [bootstrap/bootstrap-new-project.sh](./bootstrap/bootstrap-new-project.sh) — Implementation (template)
 
 ---
 
 **Last Updated:** 2026-04-29  
-**Maintained By:** Phase 9 Bootstrap Implementation
+**Maintained by:** Phase 9 Bootstrap
