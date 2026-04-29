@@ -3,9 +3,10 @@
 
 # GitHub API helper — reuses auth headers (ADR-0104 pattern)
 gh_api() {
-  curl -s \
+  curl -sf \
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer $GH_TOKEN" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
     "$@"
 }
 
