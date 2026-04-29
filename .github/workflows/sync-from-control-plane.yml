@@ -21,23 +21,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Pull ADR subtree
+      - name: Pull subtrees from control plane
         env:
           SYNC_PAT: ${{ secrets.SYNC_PAT }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha || 'manual' }}
         run: |
-          git subtree pull \
-            https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
-            adr-export --squash \
-            -m "sync: ADRs from control-plane (${{ github.event.client_payload.source_sha }})"
-
-      - name: Pull Architecture subtree
-        env:
-          SYNC_PAT: ${{ secrets.SYNC_PAT }}
-        run: |
-          git subtree pull \
-            https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
-            arch-export --squash \
-            -m "sync: architecture docs from control-plane"
+          PAIRS=("docs/adr:adr-export" "docs/architecture:arch-export")
+          for PAIR in "${PAIRS[@]}"; do
+            PREFIX="${PAIR%%:*}"; BRANCH="${PAIR##*:}"
+            git subtree pull \
+              --prefix="$PREFIX" \
+              https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+              "$BRANCH" --squash \
+              -m "sync: ${PREFIX} from control-plane (${SOURCE_SHA})"
+          done
 
       - name: Push result
         run: git push origin main
