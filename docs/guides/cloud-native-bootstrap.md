@@ -50,15 +50,16 @@ bash bootstrap/pre-bootstrap.sh \
 Optional flags:
 - `--enable-railway true` — provision Railway integration
 - `--enable-cloudflare true` — provision Cloudflare integration
-- `--yes` — skip Terraform confirmation prompt (fully non-interactive)
+- `--yes` — skip the Terraform confirmation prompt in Step 5
 
 ### Step 3 — Create GitHub App (one click)
 
 The script prints a URL. Open it in your browser and click **"Create GitHub App"**.
 
-The script has started an HTTP server on port 8080 in Cloud Shell using the Cloud Shell web
-preview URL (`https://8080-${WEB_HOST}/callback`). When GitHub redirects back after you click
-"Create", the script's HTTP server catches the callback code automatically — **you do not need
+The script starts an HTTP server on port 8080 in Cloud Shell. Cloud Shell exposes this port via
+a public preview URL (`https://8080-${WEB_HOST}/callback`, where `WEB_HOST` is a Cloud Shell
+environment variable containing your session's domain). When GitHub redirects back after you
+click "Create", the HTTP server catches the callback code automatically — **you do not need
 to copy or paste any URL**.
 
 The script converts the code into App credentials, stores the App ID and private key in
@@ -81,9 +82,9 @@ Review the plan output and type `y` to apply. Terraform creates:
 - Secret Manager access for GitHub App credentials
 
 After apply, the script sets `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT_EMAIL`
-as GitHub secrets in the new repo — via the GitHub API, not manually.
+as GitHub secrets in the new repo.
 
-### Step 6 — Done
+### Done
 
 The script triggers `autonomous-control-plane.yml` in the new repo and prints the Actions URL.
 Monitor the workflow run to confirm all ADR checks pass and `docs/adr/0200-project-charter.md`
