@@ -11,7 +11,7 @@
 #   1. export GH_TOKEN="ghp_..."   # Classic PAT: repo, workflow, admin:org
 #   2. Run this script from GCP Cloud Shell
 #   3. Open the URL shown and click "Create GitHub App" on GitHub
-#   4. Paste back the redirect URL when prompted
+#   4. Click "Install App" button
 #   5. Confirm Terraform apply when prompted (or pass --yes to skip)
 #
 # Usage:
@@ -203,15 +203,25 @@ if gcloud secrets describe "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" &>/dev/
   APP_ID=$(gcloud secrets versions access latest \
     --secret="$SM_APP_ID" --project="$SECRETS_HUB_PROJECT")
 else
-  # Compact JSON manifest (short URL to avoid query-string limits)
-  MANIFEST_ENC=$(ORG="$ORG" python3 - <<'PYEOF'
+  # Check if running in Cloud Shell
+  if [[ -z "${WEB_HOST:-}" ]]; then
+    echo "ERROR: WEB_HOST environment variable not set"
+    echo "This script must run in GCP Cloud Shell (shell.cloud.google.com)"
+    exit 1
+  fi
+
+  REDIRECT_HOST="https://8080-${WEB_HOST}"
+
+  # Generate manifest with Cloud Shell redirect URL
+  MANIFEST_ENC=$(ORG="$ORG" REDIR_HOST="$REDIRECT_HOST" python3 - <<'PYEOF'
 import os, json, urllib.parse
 org = os.environ["ORG"]
+redir = os.environ["REDIR_HOST"]
 m = {
   "name": f"{org}-agent",
   "url":  f"https://github.com/{org}",
   "hook_attributes": {"url": "https://placeholder.example.com", "active": False},
-  "redirect_url": "https://github.com/settings/apps",
+  "redirect_url": f"{redir}/callback",
   "public": False,
   "default_permissions": {
     "contents": "write", "issues": "write", "pull_requests": "write",
@@ -228,33 +238,82 @@ PYEOF
   APP_URL="https://github.com/organizations/${ORG}/settings/apps/new?state=${STATE}&manifest=${MANIFEST_ENC}"
 
   echo ""
-  echo "  ACTION REQUIRED — two steps:"
+  echo "  ACTION REQUIRED — two clicks on GitHub:"
   echo ""
-  echo "  Step 1: Open this URL in your browser:"
+  echo "  1. Open this URL:"
   echo ""
   echo "    $APP_URL"
   echo ""
-  echo "  Step 2: Click 'Create GitHub App' on the GitHub page"
+  echo "  2. Click 'Create GitHub App' button"
   echo ""
-  echo "  GitHub will redirect you to a URL like:"
-  echo "    https://github.com/settings/apps?code=XXXXXXXXXX&state=${STATE}"
+  echo "  3. Click 'Install App' button"
   echo ""
-  echo "  Copy the FULL URL from your browser address bar and paste it below."
-  echo ""
-  read -rp "  Redirect URL: " REDIRECT_URL
+  echo "  Starting HTTP server to receive callback..."
 
-  APP_CODE=$(REDIRECT_URL="$REDIRECT_URL" python3 - <<'PYEOF'
+  # Start Python HTTP server
+  python3 << 'HTTPEOF' &
+import http.server
+import urllib.parse
+import sys
 import os
-from urllib.parse import urlparse, parse_qs
-url = os.environ["REDIRECT_URL"].strip()
-qs  = parse_qs(urlparse(url).query)
-codes = qs.get("code", [])
-if not codes:
-    import sys; sys.exit(f"ERROR: No code= found in URL: {url}")
-print(codes[0])
-PYEOF
-)
+from pathlib import Path
 
+class ManifestCallbackHandler(http.server.BaseHTTPRequestHandler):
+    code_file = os.environ.get("CODE_FILE", "")
+    
+    def do_GET(self):
+        if self.path.startswith("/callback?"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            codes = qs.get("code", [])
+            if codes:
+                with open(self.code_file, "w") as f:
+                    f.write(codes[0])
+                self.send_response(200)
+                self.send_header("Content-type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"""
+<html><body>
+<h1>GitHub App Created!</h1>
+<p>Your app credentials have been captured.</p>
+<p>You can close this window and return to Cloud Shell.</p>
+</body></html>
+""")
+                sys.exit(0)
+        self.send_response(404)
+        self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass
+
+CODE_FILE="$WORK_DIR/app_code.txt" \
+python3 -m http.server 8080 -b 127.0.0.1 2>/dev/null
+HTTPEOF
+
+  HTTP_PID=$!
+  sleep 1
+
+  echo "  Waiting for redirect callback..."
+
+  # Poll for code file (max 120 seconds = 24 * 5s)
+  WAIT=0
+  while [[ ! -f "$WORK_DIR/app_code.txt" ]] && [[ $WAIT -lt 24 ]]; do
+    sleep 5
+    WAIT=$((WAIT + 1))
+  done
+
+  kill $HTTP_PID 2>/dev/null || true
+  wait $HTTP_PID 2>/dev/null || true
+
+  [[ ! -f "$WORK_DIR/app_code.txt" ]] && {
+    echo "ERROR: No code received from GitHub (timeout after 120s)"
+    echo "  Check: did you click both buttons on GitHub?"
+    exit 1
+  }
+
+  APP_CODE=$(cat "$WORK_DIR/app_code.txt")
+  [[ -z "$APP_CODE" ]] && { echo "ERROR: Code file is empty"; exit 1; }
+
+  echo "  ✅ Authorization code received"
   echo "  Converting manifest code to App credentials..."
   # Single Python process: parse id + write pem atomically — avoids bash holding the raw JSON twice
   APP_ID=$(gh_api POST "https://api.github.com/app-manifests/$APP_CODE/conversions" \
