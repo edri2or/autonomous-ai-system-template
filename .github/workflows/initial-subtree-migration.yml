@@ -1,0 +1,49 @@
+name: Initial Subtree Migration (Run Once)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Guard against re-run
+        run: |
+          if git log --oneline --all --grep="remove pre-subtree copies" | grep -q .; then
+            echo "Migration already completed. Exiting."
+            exit 1
+          fi
+
+      - name: Remove existing docs directories
+        run: |
+          # git subtree add requires the target prefix to not exist as a tracked path
+          git rm -r docs/adr
+          git rm -r docs/architecture
+          git commit -m "chore: remove pre-subtree copies (will be replaced by subtree)"
+
+      - name: Add docs as subtrees from control plane
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          PAIRS=("docs/adr:adr-export" "docs/architecture:arch-export")
+          for PAIR in "${PAIRS[@]}"; do
+            PREFIX="${PAIR%%:*}"; BRANCH="${PAIR##*:}"
+            git subtree add \
+              --prefix="$PREFIX" \
+              https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+              "$BRANCH" --squash
+          done
+
+      - name: Push
+        run: git push origin main

@@ -1,0 +1,46 @@
+name: Sync Docs from Control Plane
+
+on:
+  repository_dispatch:
+    types: [docs-updated]
+  workflow_dispatch:
+
+concurrency:
+  group: sync-from-control-plane
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Pull subtrees from control plane
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha || 'manual' }}
+        run: |
+          PAIRS=("docs/adr:adr-export" "docs/architecture:arch-export")
+          for PAIR in "${PAIRS[@]}"; do
+            PREFIX="${PAIR%%:*}"; BRANCH="${PAIR##*:}"
+            git subtree pull \
+              --prefix="$PREFIX" \
+              https://oauth2:${SYNC_PAT}@github.com/edri2or/claude-builder-pro.git \
+              "$BRANCH" --squash \
+              -m "sync: ${PREFIX} from control-plane (${SOURCE_SHA})"
+          done
+
+      - name: Push result
+        run: git push origin main
