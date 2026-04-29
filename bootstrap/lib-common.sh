@@ -50,3 +50,15 @@ PYEOF
     exit 1
   fi
 }
+
+# Store a secret in GCP Secret Manager (hub or local project).
+# Creates new secret or adds a new version if it already exists.
+store_sm_secret() {
+  local name="$1" value="$2" project="${3:-$SECRETS_HUB_PROJECT}"
+  printf '%s' "$value" | \
+    gcloud secrets versions add "$name" --project="$project" --data-file=- 2>/dev/null || \
+    printf '%s' "$value" | \
+      gcloud secrets create "$name" --project="$project" \
+        --replication-policy=automatic --data-file=-
+  echo "  ✅ $name"
+}
