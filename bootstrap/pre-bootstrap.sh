@@ -11,7 +11,7 @@
 #   1. export GH_TOKEN="ghp_..."   # Classic PAT: repo, workflow, admin:org
 #   2. Run this script from GCP Cloud Shell
 #   3. Open the URL shown and click "Create GitHub App" on GitHub
-#   4. Paste back the redirect URL when prompted
+#   4. Click "Install App" button
 #   5. Confirm Terraform apply when prompted (or pass --yes to skip)
 #
 # Usage:
@@ -36,6 +36,9 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Load shared bootstrap utilities (gh_api, set_github_secret, store_sm_secret)
+source "$SCRIPT_DIR/lib-common.sh"
 
 ORG=""; GCP_PROJECT=""; NEW_REPO=""
 ENABLE_RAILWAY="false"; ENABLE_CLOUDFLARE="false"; ENABLE_N8N="false"
@@ -132,56 +135,6 @@ if ! command -v gh &>/dev/null; then
     || python3 -m pip install --quiet PyNaCl
 fi
 
-gh_api() {
-  local METHOD="$1"; shift
-  curl -sf -X "$METHOD" \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer $GH_TOKEN" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "$@"
-}
-
-set_github_secret() {
-  local REPO="$1" NAME="$2" VALUE="$3"
-  if command -v gh &>/dev/null; then
-    printf '%s' "$VALUE" | gh secret set "$NAME" --repo "$REPO"
-    echo "  ✅ $NAME"
-    return
-  fi
-  SECRET_VALUE="$VALUE" SECRET_REPO="$REPO" SECRET_NAME="$NAME" \
-  python3 - <<'PYEOF'
-import os, json, urllib.request
-from nacl import encoding, public
-
-repo  = os.environ["SECRET_REPO"]
-name  = os.environ["SECRET_NAME"]
-value = os.environ["SECRET_VALUE"]
-token = os.environ["GH_TOKEN"]
-
-hdrs = {"Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"}
-
-req = urllib.request.Request(
-    f"https://api.github.com/repos/{repo}/actions/secrets/public-key",
-    headers=hdrs)
-with urllib.request.urlopen(req) as r:
-    key_data = json.load(r)
-
-pub_key   = public.PublicKey(key_data["key"].encode(), encoding.Base64Encoder())
-encrypted = public.SealedBox(pub_key).encrypt(
-                value.encode(), encoding.Base64Encoder()).decode()
-
-body = json.dumps({"encrypted_value": encrypted, "key_id": key_data["key_id"]}).encode()
-req = urllib.request.Request(
-    f"https://api.github.com/repos/{repo}/actions/secrets/{name}",
-    data=body, method="PUT",
-    headers={**hdrs, "Content-Type": "application/json"})
-urllib.request.urlopen(req)
-print(f"  ✅ {os.environ['SECRET_NAME']}")
-PYEOF
-}
-
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║        Autonomous AI System — Bootstrap                  ║"
 echo "╠══════════════════════════════════════════════════════════╣"
@@ -203,15 +156,25 @@ if gcloud secrets describe "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" &>/dev/
   APP_ID=$(gcloud secrets versions access latest \
     --secret="$SM_APP_ID" --project="$SECRETS_HUB_PROJECT")
 else
-  # Compact JSON manifest (short URL to avoid query-string limits)
-  MANIFEST_ENC=$(ORG="$ORG" python3 - <<'PYEOF'
+  # Check if running in Cloud Shell
+  if [[ -z "${WEB_HOST:-}" ]]; then
+    echo "ERROR: WEB_HOST environment variable not set"
+    echo "This script must run in GCP Cloud Shell (shell.cloud.google.com)"
+    exit 1
+  fi
+
+  REDIRECT_HOST="https://8080-${WEB_HOST}"
+
+  # Generate manifest with Cloud Shell redirect URL
+  MANIFEST_ENC=$(ORG="$ORG" REDIR_HOST="$REDIRECT_HOST" python3 - <<'PYEOF'
 import os, json, urllib.parse
 org = os.environ["ORG"]
+redir = os.environ["REDIR_HOST"]
 m = {
   "name": f"{org}-agent",
   "url":  f"https://github.com/{org}",
   "hook_attributes": {"url": "https://placeholder.example.com", "active": False},
-  "redirect_url": "https://github.com/settings/apps",
+  "redirect_url": f"{redir}/callback",
   "public": False,
   "default_permissions": {
     "contents": "write", "issues": "write", "pull_requests": "write",
@@ -228,36 +191,85 @@ PYEOF
   APP_URL="https://github.com/organizations/${ORG}/settings/apps/new?state=${STATE}&manifest=${MANIFEST_ENC}"
 
   echo ""
-  echo "  ACTION REQUIRED — two steps:"
+  echo "  ACTION REQUIRED — two clicks on GitHub:"
   echo ""
-  echo "  Step 1: Open this URL in your browser:"
+  echo "  1. Open this URL:"
   echo ""
   echo "    $APP_URL"
   echo ""
-  echo "  Step 2: Click 'Create GitHub App' on the GitHub page"
+  echo "  2. Click 'Create GitHub App' button"
   echo ""
-  echo "  GitHub will redirect you to a URL like:"
-  echo "    https://github.com/settings/apps?code=XXXXXXXXXX&state=${STATE}"
+  echo "  3. Click 'Install App' button"
   echo ""
-  echo "  Copy the FULL URL from your browser address bar and paste it below."
-  echo ""
-  read -rp "  Redirect URL: " REDIRECT_URL
+  echo "  Starting HTTP server to receive callback..."
 
-  APP_CODE=$(REDIRECT_URL="$REDIRECT_URL" python3 - <<'PYEOF'
+  # Start Python HTTP server
+  python3 << 'HTTPEOF' &
+import http.server
+import urllib.parse
+import sys
 import os
-from urllib.parse import urlparse, parse_qs
-url = os.environ["REDIRECT_URL"].strip()
-qs  = parse_qs(urlparse(url).query)
-codes = qs.get("code", [])
-if not codes:
-    import sys; sys.exit(f"ERROR: No code= found in URL: {url}")
-print(codes[0])
-PYEOF
-)
+from pathlib import Path
 
+class ManifestCallbackHandler(http.server.BaseHTTPRequestHandler):
+    code_file = os.environ.get("CODE_FILE", "")
+    
+    def do_GET(self):
+        if self.path.startswith("/callback?"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            codes = qs.get("code", [])
+            if codes:
+                with open(self.code_file, "w") as f:
+                    f.write(codes[0])
+                self.send_response(200)
+                self.send_header("Content-type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"""
+<html><body>
+<h1>GitHub App Created!</h1>
+<p>Your app credentials have been captured.</p>
+<p>You can close this window and return to Cloud Shell.</p>
+</body></html>
+""")
+                sys.exit(0)
+        self.send_response(404)
+        self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass
+
+CODE_FILE="$WORK_DIR/app_code.txt" \
+python3 -m http.server 8080 -b 127.0.0.1 2>/dev/null
+HTTPEOF
+
+  HTTP_PID=$!
+  sleep 1
+
+  echo "  Waiting for redirect callback..."
+
+  # Poll for code file (max 120 seconds = 24 * 5s)
+  WAIT=0
+  while [[ ! -f "$WORK_DIR/app_code.txt" ]] && [[ $WAIT -lt 24 ]]; do
+    sleep 5
+    WAIT=$((WAIT + 1))
+  done
+
+  kill $HTTP_PID 2>/dev/null || true
+  wait $HTTP_PID 2>/dev/null || true
+
+  [[ ! -f "$WORK_DIR/app_code.txt" ]] && {
+    echo "ERROR: No code received from GitHub (timeout after 120s)"
+    echo "  Check: did you click both buttons on GitHub?"
+    exit 1
+  }
+
+  APP_CODE=$(cat "$WORK_DIR/app_code.txt")
+  [[ -z "$APP_CODE" ]] && { echo "ERROR: Code file is empty"; exit 1; }
+
+  echo "  ✅ Authorization code received"
   echo "  Converting manifest code to App credentials..."
   # Single Python process: parse id + write pem atomically — avoids bash holding the raw JSON twice
-  APP_ID=$(gh_api POST "https://api.github.com/app-manifests/$APP_CODE/conversions" \
+  APP_ID=$(gh_api -X POST "https://api.github.com/app-manifests/$APP_CODE/conversions" \
     -H "Content-Type: application/json" \
     | PEM_PATH="$PEM_TMPFILE" python3 - <<'PYEOF'
 import sys, json, os
@@ -298,11 +310,11 @@ fi
 echo ""
 echo "── PHASE 2: Create repository ───────────────────────────────"
 
-if gh_api GET "https://api.github.com/repos/$ORG/$NEW_REPO" -o /dev/null 2>/dev/null; then
+if gh_api -X GET "https://api.github.com/repos/$ORG/$NEW_REPO" -o /dev/null 2>/dev/null; then
   echo "✅ $ORG/$NEW_REPO already exists"
 else
   echo "  Creating $ORG/$NEW_REPO from $TEMPLATE_REPO..."
-  gh_api POST "https://api.github.com/repos/$TEMPLATE_REPO/generate" \
+  gh_api -X POST "https://api.github.com/repos/$TEMPLATE_REPO/generate" \
     -H "Content-Type: application/json" \
     -d "$(ORG="$ORG" NEW_REPO="$NEW_REPO" python3 - <<'PYEOF'
 import os, json
@@ -394,16 +406,6 @@ if [[ "$ENABLE_RAILWAY" == "true" ]] && [[ -n "$RAILWAY_TOKEN" ]]; then
   echo ""
   echo "── PHASE 4.5: Store provider credentials in GCP SM ─────────"
 
-  store_sm_secret() {
-    local name="$1" value="$2"
-    printf '%s' "$value" | \
-      gcloud secrets versions add "$name" --project="$SECRETS_HUB_PROJECT" --data-file=- 2>/dev/null || \
-    printf '%s' "$value" | \
-      gcloud secrets create "$name" --project="$SECRETS_HUB_PROJECT" \
-        --replication-policy=automatic --data-file=-
-    echo "  ✅ $name stored in secrets hub"
-  }
-
   echo "  Storing Railway API token..."
   store_sm_secret "railway-api-token" "$RAILWAY_TOKEN"
 
@@ -428,7 +430,7 @@ if [[ "$ENABLE_N8N" == "true" ]]; then
   # Poll until GitHub registers the workflow in the new repo (repo creation is async)
   echo "  Waiting for workflows to be available..."
   _wflow_wait=0
-  until gh_api GET \
+  until gh_api -X GET \
     "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml" \
     2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('state')=='active' else 1)" 2>/dev/null; do
     _wflow_wait=$((_wflow_wait + 1))
@@ -436,7 +438,7 @@ if [[ "$ENABLE_N8N" == "true" ]]; then
     sleep 5
   done
 
-  gh_api POST \
+  gh_api -X POST \
     "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml/dispatches" \
     -H "Content-Type: application/json" -d '{"ref":"main"}' > /dev/null
   echo "  ✅ populate-secrets.yml triggered"
@@ -446,7 +448,7 @@ if [[ "$ENABLE_N8N" == "true" ]]; then
   WAIT=0
   while [[ $WAIT -lt 18 ]]; do
     sleep 10; WAIT=$((WAIT + 1))
-    RUN_STATUS=$(gh_api GET \
+    RUN_STATUS=$(gh_api -X GET \
       "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/populate-secrets.yml/runs?per_page=1" \
       | python3 -c "import sys,json; runs=json.load(sys.stdin).get('workflow_runs',[]); print(runs[0]['conclusion'] if runs else 'pending')" 2>/dev/null || echo "pending")
     [[ "$RUN_STATUS" == "success" ]] && break
@@ -474,7 +476,7 @@ PYEOF
 )
   PROJECT_DOMAIN="$PROJECT_DOMAIN" N8N_SUBDOMAIN="$N8N_SUBDOMAIN" \
   N8N_ADMIN_EMAIL="$N8N_ADMIN_EMAIL" NEW_REPO="$NEW_REPO" \
-  gh_api POST \
+  gh_api -X POST \
     "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/deploy-n8n.yml/dispatches" \
     -H "Content-Type: application/json" \
     -d "$DISPATCH_BODY" > /dev/null
@@ -488,7 +490,7 @@ fi
 echo ""
 echo "── PHASE 5: Trigger workflow ────────────────────────────────"
 
-gh_api POST \
+gh_api -X POST \
   "https://api.github.com/repos/$ORG/$NEW_REPO/actions/workflows/autonomous-control-plane.yml/dispatches" \
   -H "Content-Type: application/json" -d '{"ref":"main"}' > /dev/null
 
