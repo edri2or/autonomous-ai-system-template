@@ -14,7 +14,7 @@ name: Deploy N8N
 # Prerequisites (must run first):
 #   - terraform apply (creates GCP WIF + SM secret containers + IAM bindings)
 #   - populate-secrets.yml (generates N8N secrets in GCP SM)
-#   - pre-bootstrap.sh stored RAILWAY_TOKEN, CF_TOKEN, CF_ZONE_ID in GCP SM
+#   - pre-bootstrap.sh stored RAILWAY_TOKEN, CF_TOKEN, CF_ZONE_ID in hub GCP SM
 
 on:
   workflow_dispatch:
@@ -58,35 +58,43 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
 
       # ── Phase 1: Fetch all required secrets from GCP Secret Manager ────────────
+      # Provider tokens (Railway, Cloudflare) live in the hub project.
+      # N8N secrets (encryption key, owner password) live in this project's SM.
       - name: Fetch secrets from GCP SM
         id: sm
         env:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_HUB_PROJECT: ${{ secrets.GCP_SECRETS_HUB_PROJECT }}
         run: |
           set -euo pipefail
 
-          get_secret() {
+          get_hub_secret() {
             gcloud secrets versions access latest \
-              --secret="$1" --project="$GCP_PROJECT" 2>/dev/null
+              --secret="$1" --project="$GCP_HUB_PROJECT"
           }
 
-          RAILWAY_TOKEN=$(get_secret "railway-api-token")
+          get_project_secret() {
+            gcloud secrets versions access latest \
+              --secret="$1" --project="$GCP_PROJECT"
+          }
+
+          RAILWAY_TOKEN=$(get_hub_secret "railway-api-token")
           echo "::add-mask::$RAILWAY_TOKEN"
           echo "railway_token=$RAILWAY_TOKEN" >> "$GITHUB_OUTPUT"
 
-          N8N_ENCRYPTION_KEY=$(get_secret "n8n-encryption-key")
+          N8N_ENCRYPTION_KEY=$(get_project_secret "n8n-encryption-key")
           echo "::add-mask::$N8N_ENCRYPTION_KEY"
           echo "n8n_encryption_key=$N8N_ENCRYPTION_KEY" >> "$GITHUB_OUTPUT"
 
-          N8N_OWNER_PASSWORD=$(get_secret "n8n-owner-password")
+          N8N_OWNER_PASSWORD=$(get_project_secret "n8n-owner-password")
           echo "::add-mask::$N8N_OWNER_PASSWORD"
           echo "n8n_owner_password=$N8N_OWNER_PASSWORD" >> "$GITHUB_OUTPUT"
 
-          CF_TOKEN=$(get_secret "cloudflare-api-token")
+          CF_TOKEN=$(get_hub_secret "cloudflare-api-token")
           echo "::add-mask::$CF_TOKEN"
           echo "cf_token=$CF_TOKEN" >> "$GITHUB_OUTPUT"
 
-          CF_ZONE_ID=$(get_secret "cloudflare-zone-id")
+          CF_ZONE_ID=$(get_hub_secret "cloudflare-zone-id")
           echo "cf_zone_id=$CF_ZONE_ID" >> "$GITHUB_OUTPUT"
 
       # ── Phase 2: Create Railway project + deploy N8N + Postgres ─────────────────
@@ -118,11 +126,14 @@ jobs:
           fi
           echo "  ✅ Railway project created: $PROJECT_ID"
 
-          # Store project/environment IDs in GCP SM for future workflows (create-or-update)
+          # Store project/environment IDs in GCP SM for future workflows
           store_id() {
             local name="$1" value="$2"
-            printf '%s' "$value" | gcloud secrets versions add "$name" --project="$GCP_PROJECT" --data-file=- 2>/dev/null || \
-            printf '%s' "$value" | gcloud secrets create "$name" --project="$GCP_PROJECT" --replication-policy=automatic --data-file=-
+            if gcloud secrets describe "$name" --project="$GCP_PROJECT" &>/dev/null; then
+              printf '%s' "$value" | gcloud secrets versions add "$name" --project="$GCP_PROJECT" --data-file=-
+            else
+              printf '%s' "$value" | gcloud secrets create "$name" --project="$GCP_PROJECT" --replication-policy=automatic --data-file=-
+            fi
           }
           store_id "railway-project-id"    "$PROJECT_ID"
           store_id "railway-environment-id" "$ENVIRONMENT_ID"
@@ -159,7 +170,7 @@ jobs:
             curl -sf -X POST "$GRAPHQL_URL" \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"query\": \"mutation { variableUpsert(input: {projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", name: \\\"$name\\\", value: \\\"$value\\\"}) }\"}" \
+              -d "{\"query\": \"mutation { variableUpsert(input: {projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", name: \\\"$name\\\", value: \\\"$value\\\"}) }\"}"\
               > /dev/null
           }
 
@@ -188,7 +199,7 @@ jobs:
           DOMAIN_RESPONSE=$(curl -sf -X POST "$GRAPHQL_URL" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"mutation { customDomainCreate(input: {domain: \\\"${{ env.N8N_DOMAIN }}\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\"}) { id cnameCheck { link } } }\"}") 
+            -d "{\"query\": \"mutation { customDomainCreate(input: {domain: \\\"${{ env.N8N_DOMAIN }}\\\", serviceId: \\\"$N8N_SERVICE_ID\\\", environmentId: \\\"$ENVIRONMENT_ID\\\"}) { id cnameCheck { link } } }\"}")
 
           CNAME_TARGET=$(echo "$DOMAIN_RESPONSE" | jq -r '.data.customDomainCreate.cnameCheck.link // empty')
 

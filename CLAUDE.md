@@ -1,9 +1,18 @@
-# Phase 9 Bootstrap — Operational Memory
+# CLAUDE.md — Autonomous AI System Template
 
-**Status:** ACTIVE (2026-04-29)  
-**Secrets Hub Project:** or-infra-templet-admin
+## Hard Rules (Never Break)
 
-## Quick Reference
+- **NEVER ask the user to set a GitHub secret manually.** All GitHub secrets are set
+  programmatically by `bootstrap/pre-bootstrap.sh` or Claude Code sessions via the GitHub API.
+- **NEVER ask the user to download a service account key.** Cloud Shell uses Application Default
+  Credentials (ADC); SA keys must not be created or stored for bootstrap operations.
+- **NEVER ask the user to navigate GitHub Settings** beyond (1) creating a GitHub App via the URL
+  shown by `pre-bootstrap.sh` and clicking "Create", and (2) clicking "Install" to approve it.
+- **NEVER store an SA key in GitHub Secrets.** WIF (Workload Identity Federation) is the only
+  allowed mechanism for GitHub Actions → GCP authentication after bootstrap completes.
+- NEVER print, commit, log, or expose token/secret/PEM values.
+
+## Secrets Hub Quick Reference
 
 **Default secrets hub:** `or-infra-templet-admin` (project ID: 974960215714)
 
@@ -24,13 +33,6 @@ Hub contains:
 - GitHub App credentials (always required)
 - Provider tokens (Railway, Cloudflare, N8N) — conditional
 
-## Current Implementation
-
-- **Project created:** 2026-04-29 in Cloud Shell
-- **Billing:** Active and verified
-- **Secret Manager API:** Enabled
-- **17 secrets migrated:** From or-infra-admin-hub → or-infra-templet-admin ✓
-
 ## Related Files
 
 - [ADR-0105: Centralized Secrets Hub](../docs/adr/0105-centralized-secrets-hub.md) — Architecture & decision
@@ -40,5 +42,4 @@ Hub contains:
 
 ---
 
-**Last Updated:** 2026-04-29  
-**Maintained by:** Phase 9 Bootstrap
+**Last Updated:** 2026-04-29

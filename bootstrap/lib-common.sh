@@ -55,10 +55,11 @@ PYEOF
 # Creates new secret or adds a new version if it already exists.
 store_sm_secret() {
   local name="$1" value="$2" project="${3:-$SECRETS_HUB_PROJECT}"
-  printf '%s' "$value" | \
-    gcloud secrets versions add "$name" --project="$project" --data-file=- 2>/dev/null || \
-    printf '%s' "$value" | \
-      gcloud secrets create "$name" --project="$project" \
-        --replication-policy=automatic --data-file=-
+  if gcloud secrets describe "$name" --project="$project" &>/dev/null; then
+    printf '%s' "$value" | gcloud secrets versions add "$name" --project="$project" --data-file=-
+  else
+    printf '%s' "$value" | gcloud secrets create "$name" --project="$project" \
+      --replication-policy=automatic --data-file=-
+  fi
   echo "  ✅ $name"
 }
