@@ -331,15 +331,16 @@ if ! command -v terraform &>/dev/null; then
 fi
 
 cat > terraform.tfvars <<TFVARS
-gcp_project_id     = "$GCP_PROJECT"
-github_org         = "$ORG"
-repo_name          = "$NEW_REPO"
-enable_railway     = $ENABLE_RAILWAY
-enable_cloudflare  = $ENABLE_CLOUDFLARE
-enable_n8n         = $ENABLE_N8N
-project_domain     = "$PROJECT_DOMAIN"
-n8n_subdomain      = "$N8N_SUBDOMAIN"
-n8n_admin_email    = "$N8N_ADMIN_EMAIL"
+gcp_project_id          = "$GCP_PROJECT"
+secrets_hub_project_id  = "$SECRETS_HUB_PROJECT"
+github_org              = "$ORG"
+repo_name               = "$NEW_REPO"
+enable_railway          = $ENABLE_RAILWAY
+enable_cloudflare       = $ENABLE_CLOUDFLARE
+enable_n8n              = $ENABLE_N8N
+project_domain          = "$PROJECT_DOMAIN"
+n8n_subdomain           = "$N8N_SUBDOMAIN"
+n8n_admin_email         = "$N8N_ADMIN_EMAIL"
 TFVARS
 
 # Cloud Shell provides Application Default Credentials — no SA key needed
