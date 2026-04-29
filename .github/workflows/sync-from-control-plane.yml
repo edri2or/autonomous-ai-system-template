@@ -5,9 +5,15 @@ on:
     types: [docs-updated]
   workflow_dispatch:
 
+concurrency:
+  group: sync-from-control-plane
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout with full history
