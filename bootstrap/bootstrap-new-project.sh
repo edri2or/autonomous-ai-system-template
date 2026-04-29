@@ -161,14 +161,14 @@ echo "=== Phase 4: Configure Terraform ==="
 
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 
-# Combine sed substitutions into a single pass
+# Populate terraform.tfvars from variables (single pass, anchored patterns)
 sed -i \
-  -e "s|github_org.*=.*|github_org = \"$ORG\"|g" \
-  -e "s|gcp_project_id.*=.*|gcp_project_id = \"$GCP_PROJECT\"|g" \
-  -e "s|secrets_hub_project_id.*=.*|secrets_hub_project_id = \"$SECRETS_HUB_PROJECT\"|g" \
-  -e "s|enable_railway.*=.*|enable_railway = $ENABLE_RAILWAY|g" \
-  -e "s|enable_cloudflare.*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|g" \
-  -e "s|enable_n8n.*=.*|enable_n8n = $ENABLE_N8N|g" \
+  -e "s|^github_org\s*=.*|github_org = \"$ORG\"|" \
+  -e "s|^gcp_project_id\s*=.*|gcp_project_id = \"$GCP_PROJECT\"|" \
+  -e "s|^secrets_hub_project_id\s*=.*|secrets_hub_project_id = \"$SECRETS_HUB_PROJECT\"|" \
+  -e "s|^enable_railway\s*=.*|enable_railway = $ENABLE_RAILWAY|" \
+  -e "s|^enable_cloudflare\s*=.*|enable_cloudflare = $ENABLE_CLOUDFLARE|" \
+  -e "s|^enable_n8n\s*=.*|enable_n8n = $ENABLE_N8N|" \
   terraform/terraform.tfvars
 
 # Read GitHub App ID from secrets hub (must come after gcloud is auth'd)
@@ -219,12 +219,12 @@ if [[ "$REPLY" =~ ^[Yy][Ee][Ss]$ ]]; then
   echo "=== Phase 7: Create GitHub Secrets ==="
   cd ..
 
-  for SECRET_NAME in "GCP_WORKLOAD_IDENTITY_PROVIDER:$WIF_PROVIDER" "GCP_SERVICE_ACCOUNT_EMAIL:$SA_EMAIL" "GCP_SECRETS_HUB_PROJECT:$SECRETS_HUB_PROJECT" "GH_APP_ID:$APP_ID"; do
-    NAME="${SECRET_NAME%%:*}"
-    VALUE="${SECRET_NAME##*:}"
-    set_github_secret "$ORG/$NEW_REPO" "$NAME" "$VALUE"
-    echo "  ✓ Secret $NAME set"
-  done
+  # Set GitHub secrets (key-value pairs)
+  set_github_secret "$ORG/$NEW_REPO" "GCP_WORKLOAD_IDENTITY_PROVIDER" "$WIF_PROVIDER"
+  set_github_secret "$ORG/$NEW_REPO" "GCP_SERVICE_ACCOUNT_EMAIL"      "$SA_EMAIL"
+  set_github_secret "$ORG/$NEW_REPO" "GCP_SECRETS_HUB_PROJECT"         "$SECRETS_HUB_PROJECT"
+  set_github_secret "$ORG/$NEW_REPO" "GH_APP_ID"                      "$APP_ID"
+  echo "  ✓ Secrets set (WIF, hub project, app ID)"
 
   # --------------------------------------------------------------------------
   # Phase 8: Commit bootstrap state

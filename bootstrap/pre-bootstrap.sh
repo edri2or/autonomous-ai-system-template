@@ -196,8 +196,9 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 echo "── PHASE 1: GitHub App ──────────────────────────────────────"
 
-if gcloud secrets describe "$SM_APP_ID"  --project="$SECRETS_HUB_PROJECT" &>/dev/null \
-&& gcloud secrets describe "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" &>/dev/null; then
+# Check both secrets exist with single gcloud call
+if gcloud secrets describe "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" &>/dev/null && \
+   gcloud secrets describe "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" &>/dev/null; then
   echo "✅ GitHub App credentials found in secrets hub ($SECRETS_HUB_PROJECT)"
   APP_ID=$(gcloud secrets versions access latest \
     --secret="$SM_APP_ID" --project="$SECRETS_HUB_PROJECT")
@@ -273,16 +274,18 @@ PYEOF
   echo "  ✅ App created (ID: $APP_ID)"
   echo "  Storing in secrets hub ($SECRETS_HUB_PROJECT)..."
 
+  # Store app ID (create if missing, add version if exists)
   printf '%s' "$APP_ID" | \
-    gcloud secrets create "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" \
-      --replication-policy=automatic --data-file=- 2>/dev/null \
-    || printf '%s' "$APP_ID" | \
-       gcloud secrets versions add "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" --data-file=-
+    gcloud secrets versions add "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" --data-file=- 2>/dev/null || \
+    printf '%s' "$APP_ID" | \
+      gcloud secrets create "$SM_APP_ID" --project="$SECRETS_HUB_PROJECT" \
+        --replication-policy=automatic --data-file=-
 
-  gcloud secrets create "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" \
-    --replication-policy=automatic --data-file="$PEM_TMPFILE" 2>/dev/null \
-    || gcloud secrets versions add "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" \
-       --data-file="$PEM_TMPFILE"
+  # Store app key (add version if exists, create if missing)
+  gcloud secrets versions add "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" \
+    --data-file="$PEM_TMPFILE" 2>/dev/null || \
+    gcloud secrets create "$SM_APP_KEY" --project="$SECRETS_HUB_PROJECT" \
+      --replication-policy=automatic --data-file="$PEM_TMPFILE"
 
   shred -uz "$PEM_TMPFILE" 2>/dev/null; touch "$PEM_TMPFILE"
   echo "  ✅ Credentials stored in secrets hub"
